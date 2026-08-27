@@ -24,7 +24,10 @@ deep = (dist_in >= DEEP).astype(np.uint8) * 255
 deep_pts_all = np.column_stack(np.nonzero(deep)[::-1])
 
 
-def detect_cells(img, min_area=60):
+# Detect NUCLEI in the DAPI channel: nuclei never touch (cells collide
+# first), so simple thresholding stays reliable even when cells crowd the
+# letter — the same reason real workflows segment nuclei, not cell bodies.
+def detect_cells(img, min_area=20):
     _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     out = []
@@ -66,15 +69,18 @@ def build_letter_mask(cells, step_px=12, spot_r=11, occupied_r=28,
 
 
 # %%
-# Run the feedback loop (~1 min for 500 cycles)
-core.setConfig("Channel", "phase-contrast")
+# Run the feedback loop (~15 s for 500 cycles)
 sim.reset()
 for i in range(500):
+    core.setConfig("Channel", "DAPI")        # acquire the nuclei channel
     core.snapImage()
-    img = core.getImage()
-    cells = detect_cells(img)
+    cells = detect_cells(core.getImage())
     core.setSLMImage("SLM", build_letter_mask(cells))
     advance(sim, seconds=1.0)
+
+core.setConfig("Channel", "phase-contrast")  # final image for display
+core.snapImage()
+img = core.getImage()
 
 # %%
 # Metrics: cells-on-target is the fair one — pixel coverage cannot reach

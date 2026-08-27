@@ -199,3 +199,154 @@ class CellBase:
         area = polygon_area(pts)
         if area > 0:
             self.r *= np.sqrt(self.area0 / area)
+
+"""Optogenetic cell behaviour module."""
+import numpy as np
+
+
+
+
+class OptogeneticCell(CellBase):
+
+    def __init__(self, *args, protrusion_gain: float = 0.05, impulse: float = 24.0, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.protrusion_gain = protrusion_gain
+        self.impulse = impulse
+        self.is_stimulated = False
+
+
+    def stimulate(self, mask: np.ndarray, camera_offset: tuple[float, float] = (0.0, 0.0)) -> None:
+        """Apply optogenetic stimulation based on mask.
+
+        The mask is in camera/viewport space (matching the rendered image).
+        Vertex world positions are converted to viewport coordinates using
+        *camera_offset* before being checked against the mask.
+        """
+        if mask is None or not mask.any():
+            self.is_stimulated = False
+            return
+
+        # Convert vertex world positions to viewport (camera-relative) coords
+        vertices = self.vertices_positions
+        vx = vertices[:, 0] - camera_offset[0]
+        vy = vertices[:, 1] - camera_offset[1]
+
+        # Check which vertices fall within the mask bounds
+        inside = ((vx >= 0) & (vx < mask.shape[1]) &
+                  (vy >= 0) & (vy < mask.shape[0]))
+
+        if not inside.any():
+            self.is_stimulated = False
+            return
+
+        # Get pixel indices for vertices inside bounds (round, not truncate,
+        # to avoid systematic sub-pixel bias that skews the force direction)
+        ix = np.round(vx[inside]).astype(int)
+        iy = np.round(vy[inside]).astype(int)
+        # Clamp after rounding (a vertex at 511.6 rounds to 512 which is out of bounds)
+        ix = np.clip(ix, 0, mask.shape[1] - 1)
+        iy = np.clip(iy, 0, mask.shape[0] - 1)
+
+        # Check mask at vertex position
+        hit = mask[iy, ix] > 0
+
+        if not hit.any():
+            self.is_stimulated = False
+            return
+
+        self.is_stimulated = True
+
+        # Find which vertices to protrude (boolean index into inside-subset)
+        idx = np.where(inside)[0][hit]
+
+        # Apply protrusion
+        self.r[idx] += self.protrusion_gain * self.base_r
+        self.r = np.clip(self.r, 0.4 * self.base_r, 2.2 * self.base_r)
+        self._conserve_area()
+
+        # Apply impulse toward stimulated region, scaled by fraction of
+        # vertices illuminated so partial stimulation gives proportional force.
+        # Sets the velocity component toward the light (not accumulative) so
+        # the result is frame-rate independent.  Perpendicular Brownian jitter
+        # is preserved for natural-looking motion.
+        hit_vertices = vertices[idx]
+        target = np.mean(hit_vertices, axis=0)
+        direction = target - self.center
+        norm = np.linalg.norm(direction)
+
+        if norm > 0:
+            stim_fraction = len(idx) / len(self.r)
+            direction_unit = direction / norm
+            desired_speed = self.impulse * stim_fraction
+            current_proj = np.dot(self.vel, direction_unit)
+            self.vel += direction_unit * (desired_speed - current_proj)
+
+"""Spatial indexing for fast collision detection."""
+import numpy as np
+from typing import List, Tuple, Set
+
+
+
+class SpatialGrid:
+    """Spatial grid for efficient collision detection."""
+
+    def __init__(self, width: float, height: float, cell_size: float = 50.0):
+        self.width = width
+        self.height = height
+        self.cell_size = cell_size
+
+        self.grid_width = int(np.ceil(width / cell_size))
+        self.grid_height = int(np.ceil(height / cell_size))
+        self.grid = {}
+
+
+    def clear(self) -> None:
+        """Clear the grid"""
+        self.grid.clear()
+
+    def add_cell(self, cell: CellBase, index: int) -> None:
+        """Add a cell to the grid."""
+        grid_pos = self._get_grid_position(cell.center)
+
+        # Add to multiple grid cells if cell is large
+        radius = np.max(cell.r)
+        cell_to_check = int(np.ceil(radius / self.cell_size))
+
+        for dx in range(-cell_to_check, cell_to_check + 1):
+            for dy in range(-cell_to_check, cell_to_check+1):
+                gx = (grid_pos[0] + dx) % self.grid_width
+                gy = (grid_pos[1] + dy) % self.grid_height
+                key = (gx, gy)
+
+                if key not in self.grid:
+                    self.grid[key] = []
+                
+                self.grid[key].append(index)
+    
+
+    def get_potential_collisions(self, cell: CellBase, index: int) -> Set[int]:
+        """Get indices of cells that might collide with given cell."""
+        grid_pos = self._get_grid_position(cell.center)
+        potential = set()
+
+        radius = np.max(cell.r)
+        cells_to_check = int(np.ceil(radius / self.cell_size))
+
+        for dx in range(-cells_to_check, cells_to_check + 1):
+            for dy in range(-cells_to_check, cells_to_check + 1):
+                gx = (grid_pos[0] + dx) % self.grid_width
+                gy = (grid_pos[1] + dy) % self.grid_height
+                key = (gx, gy)
+
+                if key in self.grid:
+                    for other_index in self.grid[key]:
+                        if other_index != index:
+                            potential.add(other_index)
+
+        return potential
+
+    def _get_grid_position(self, pos: np.ndarray) -> Tuple[int, int]:
+        """Convert position to grid coordinates."""
+        gx = int(pos[0] / self.cell_size) % self.grid_width
+        gy = int(pos[1] / self.cell_size) % self.grid_height
+        return (gx, gy)

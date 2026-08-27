@@ -9,7 +9,7 @@ from typing import ClassVar
 
 from pymmcore_plus.experimental.unicore import UniMMCore
 from pymmcore_plus.experimental.unicore.devices._slm import SLMDevice
-import vmteach.engine.simulation_bridge as bridge_module
+import vmteach.bridge as bridge_module
 
 class SimSLMDevice(SLMDevice):
     """Virtual SLM device for simulation."""

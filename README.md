@@ -19,9 +19,10 @@ Micro-Manager core API.
 
 This package accompanies the NEUBIAS
 [training-resources](https://neubias.github.io/training-resources/) module on
-**feedback photomanipulation** and is a frozen teaching subset of the full
+**feedback photomanipulation**. It began as a subset of the full
 [virtual-microscope](https://github.com/hinderling/virtual-microscope)
-research simulator.
+research simulator and was rewritten for teaching: ~1,900 lines of Python,
+one specimen (optogenetic cells), 4 ms per frame (250 fps) on a laptop.
 
 ## Install
 
@@ -35,12 +36,13 @@ With the napari GUI (interactive microscope control, results exploration):
 pip install "virtual-microscope-teaching[gui]"
 ```
 
-Requires Python ≥ 3.10. No hardware, no Micro-Manager device adapters, no
-C++ — everything is pure Python.
+Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no
+Micro-Manager device adapters, no C++ — everything is pure Python.
 
 > The very first `load_microscope()` compiles the simulation physics
 > (numba, ~5 s) and caches the result on disk — every later load takes
-> ~1 s, including after restarting Python.
+> under a second, including after restarting Python. A full 100-cycle
+> feedback experiment runs in ~2 s.
 
 ## Quick start: a complete feedback experiment
 
@@ -78,9 +80,11 @@ The cell population migrates upward, steered by your loop.
 
 ## Timing model (read this before designing experiments)
 
-1. **Stimulation is applied once per `core.setSLMImage()` call** — an impulse
-   at mask-set time. Loop frequency *is* stimulation frequency (mirrors
-   pulsed optogenetic protocols).
+1. **Stimulation is an impulse, applied when the mask is set** (and refreshed
+   on snaps while the mask is displayed). The impulse *sets* the cell
+   velocity toward the light, so each loop iteration delivers effectively one
+   stimulus — the feedback-loop frequency is the stimulation frequency
+   (mirrors pulsed optogenetic protocols).
 2. **Stepped mode (default)** — simulated time advances only via
    `advance(sim, seconds=...)`. Same seed + same loop = identical result on
    every machine. This is the course default.
@@ -122,12 +126,12 @@ segmentation, stimulation masks, tracks) as napari layers:
 
 ## Provenance
 
-Teaching subset extracted from
+The cell physics (numba vertex model, optogenetic response) is taken from
 [hinderling/virtual-microscope](https://github.com/hinderling/virtual-microscope)
-at commit `25ddf57` (branch `virtual-env`), package renamed
-`virtual_microscope` → `vmteach`. The full simulator has 35 specimen
-backends; this package ships only the `optogenetic` backend and its runtime
-dependencies.
+at commit `25ddf57` (branch `virtual-env`). Rendering, optics, the device
+bridge, and the device set were rewritten for this package: teaching needs
+speed, determinism, and a small readable codebase more than the full
+simulator's 35 specimen backends.
 
 ## License
 

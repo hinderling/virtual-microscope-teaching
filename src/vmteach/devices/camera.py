@@ -7,7 +7,7 @@ import numpy as np
 from numpy.typing import DTypeLike
 from pymmcore_plus.experimental.unicore import CameraDevice, UniMMCore
 from pymmcore_plus.experimental.unicore import pymm_property
-import vmteach.engine.simulation_bridge as bridge_module
+import vmteach.bridge as bridge_module
 
 class SimCameraDevice(CameraDevice):
     """
@@ -93,7 +93,7 @@ class SimCameraDevice(CameraDevice):
 
     # Minimum interval between frames (seconds) to avoid starving the Qt main
     # thread.  The rendering holds the GIL, so without a gap the UI freezes.
-    _MIN_FRAME_INTERVAL: float = 0.08  # ~12 FPS max
+    _MIN_FRAME_INTERVAL: float = 0.033  # ~30 FPS max
 
     def start_sequence(
         self,

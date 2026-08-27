@@ -1,5 +1,5 @@
 from pymmcore_plus.experimental.unicore import XYStageDevice
-import vmteach.engine.simulation_bridge as bridge_module
+import vmteach.bridge as bridge_module
 
 
 class SimStageDevice(XYStageDevice):

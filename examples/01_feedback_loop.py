@@ -2,7 +2,7 @@
 # Closed-loop feedback photomanipulation on a virtual microscope
 #
 # Install (once): pip install virtual-microscope-teaching
-# Works locally (Python >= 3.10) and on Google Colab.
+# Runs locally, Python >= 3.10.
 
 import numpy as np
 import cv2

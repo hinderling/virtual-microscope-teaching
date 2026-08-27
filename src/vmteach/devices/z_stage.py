@@ -1,6 +1,6 @@
 from pymmcore_plus.experimental.unicore import StageDevice
 from pymmcore_plus import FocusDirection
-import vmteach.engine.simulation_bridge as bridge_module
+import vmteach.bridge as bridge_module
 
 class SimZStageDevice(StageDevice):
 

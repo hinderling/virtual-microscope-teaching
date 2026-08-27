@@ -70,21 +70,27 @@ def test_feedback_loop_steers_cells(scope):
 
     def run(n=40):
         sim.reset()
-        ys = []
+        y_prev = sim.centers[:, 1].copy()
+        total_dy = np.zeros(len(y_prev))
         for _ in range(n):
             core.snapImage()
             img = core.getImage()
             cells = detect_cells(img)
             core.setSLMImage("SLM", steer_mask(cells))
             advance(sim, seconds=1.0)
-            ys.append(np.mean([cy for _, cy in cells]))
-        return ys, img
+            # wrap-aware displacement (periodic world boundaries)
+            dy = sim.centers[:, 1] - y_prev
+            dy -= sim.height * np.round(dy / sim.height)
+            total_dy += dy
+            y_prev = sim.centers[:, 1].copy()
+        return total_dy, img
 
-    ys1, img1 = run()
-    assert ys1[-1] < ys1[0] - 30, "steering failed: population did not move up"
+    dy1, img1 = run()
+    assert dy1.mean() < -25, \
+        f"steering failed: mean dy {dy1.mean():.1f} (should be << 0)"
 
-    ys2, img2 = run()
-    assert ys1 == ys2, "rerun after reset() is not deterministic"
+    dy2, img2 = run()
+    assert np.array_equal(dy1, dy2), "rerun after reset() is not deterministic"
     assert np.array_equal(img1, img2), "images not bit-identical after reset()"
 
 

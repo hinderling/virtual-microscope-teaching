@@ -110,10 +110,7 @@ class RealtimeEngine:
     def _run(self):
         """Background loop: call step(dt) at tick_hz."""
         last = time.monotonic()
-        # Prefer step_autonomous (skips SLM effects) if available
-        step_fn = (self._sim.step_autonomous
-                   if hasattr(self._sim, 'step_autonomous')
-                   else self._sim.step)
+        step_fn = self._sim.step
 
         interval = 1.0 / self._tick_hz
         while not self._stop.wait(interval):
@@ -137,9 +134,5 @@ class RealtimeEngine:
             with self._lock:
                 try:
                     step_fn(dt)
-                    # Tick SLM processor so stimulation decays
-                    if (self._bridge is not None
-                            and self._bridge._slm_processor is not None):
-                        self._bridge._slm_processor.tick(dt)
                 except Exception:
                     logger.exception("RealtimeEngine step error")
