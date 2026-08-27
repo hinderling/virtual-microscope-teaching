@@ -1,15 +1,17 @@
 # %%
-# Advanced: the same feedback loop as an event-driven MDA acquisition
+# Advanced: declare what you want, not what the microscope should do
 #
-# The for-loop in example 01 is the clearest way to LEARN feedback control,
-# but production acquisitions in pymmcore-plus are built on useq-schema
-# MDAEvents executed by the MDA engine: hardware-timed, logged, and
-# GUI-compatible (the napari-micromanager MDA panel builds the same events).
+# This is the pymmcore-plus implementation of the declarative pattern:
+# acquisition steps are described as hardware-agnostic useq-schema events
+# ("an image at time t in channel c with stimulation pattern p") and the
+# MDA engine translates them into hardware commands. The same event
+# descriptions could be executed by other engines on other systems.
 #
-# The trick for feedback experiments: `run_mda()` accepts any *iterable* of
-# events, including a Queue that is being filled WHILE the acquisition
-# runs. Analysis decides, event by event, what the microscope does next.
-# This adapts the Analyzer/Controller pattern from the pymmcore-plus guide:
+# In pymmcore-plus an event is a useq.MDAEvent, and the engine entry point
+# is `run_mda()`. The trick for feedback experiments: `run_mda()` accepts
+# any *iterable* of events, including a Queue that is being filled WHILE
+# the acquisition runs. Analysis decides, event by event, what happens
+# next. This adapts the Analyzer/Controller pattern from the guide:
 # https://pymmcore-plus.github.io/pymmcore-plus/guides/event_driven_acquisition/
 #
 #   Controller ──puts──▶ Queue ──iterated by──▶ MDA engine ──▶ microscope
