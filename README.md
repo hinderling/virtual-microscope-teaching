@@ -105,12 +105,20 @@ GUI below.
 
 ```python
 from vmteach.gui import launch_gui
-core, sim = load_microscope("optogenetic")
+core, sim = load_microscope("optogenetic", mode="realtime")
 viewer = launch_gui(core)   # napari + micro-manager widgets on the virtual scope
 ```
 
-Everything you click in the GUI issues the same core API calls your scripts
-make — the GUI and the script are two faces of one microscope.
+![napari-micromanager on the virtual microscope](docs/images/napari_gui.png)
+
+Snap, Live (~10 fps of crawling simulated cells), channel and objective
+dropdowns, exposure, MDA — every control issues the same core API calls your
+scripts make. The GUI and the script are two faces of one microscope. See the
+[GUI walkthrough](docs/gui_walkthrough.md) for the click-by-click tour, and
+`vmteach.gui.show_results(...)` to explore finished experiments (images,
+segmentation, stimulation masks, tracks) as napari layers:
+
+![results explorer](docs/images/results_explorer.png)
 
 ## Provenance
 
