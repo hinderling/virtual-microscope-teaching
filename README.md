@@ -38,9 +38,9 @@ pip install "virtual-microscope-teaching[gui]"
 Requires Python ≥ 3.10. No hardware, no Micro-Manager device adapters, no
 C++ — everything is pure Python.
 
-> First load compiles the simulation physics (numba) — expect a one-time
-> ~10–20 s "Preparing virtual microscope" message. Subsequent operations are
-> fast.
+> The very first `load_microscope()` compiles the simulation physics
+> (numba, ~5 s) and caches the result on disk — every later load takes
+> ~1 s, including after restarting Python.
 
 ## Quick start: a complete feedback experiment
 
