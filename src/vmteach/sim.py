@@ -1,4 +1,4 @@
-"""OptoCellSim — the simulated specimen.
+"""OptoCellSim: the simulated specimen.
 
 Vertex-model cells (numba physics, see cells.py) that respond to SLM light
 with protrusion and directed migration. Exposes exactly the surface the
@@ -174,7 +174,7 @@ class OptoCellSim:
     def _handle_mask(self, mask: np.ndarray | None) -> None:
         """Apply optogenetic stimulation. Mask is in viewport coordinates.
 
-        Gated on the light path: the SLM only *modulates* light — the
+        Gated on the light path: the SLM only *modulates* light, so the
         pattern is delivered to the sample only while the stimulation
         LED is on (Channel "CyanStim"), exactly like real hardware.
         """
@@ -216,7 +216,7 @@ class OptoCellSim:
             # CyanStim: image the SLM pattern projected onto the sample.
             # What the camera sees is the stimulation light itself (bright,
             # with a halo from the optics) plus a faint reflection of the
-            # cells — enough to check mask–sample alignment, exactly as on
+            # cells, enough to check the mask to sample alignment, exactly as on
             # a real microscope.
             faint = self.renderer.render(self._cells, 0)
             view = self._crop_view(faint).astype(np.float32) * 0.05

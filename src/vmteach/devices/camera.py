@@ -58,7 +58,7 @@ class SimCameraDevice(CameraDevice):
         return bool(bridge is not None and getattr(bridge._sim, 'rgb_mode', False))
 
     def shape(self) -> tuple[int, ...]:
-        """Frame shape — ROI-cropped (h, w[, 3]) when an ROI is active."""
+        """Frame shape, ROI-cropped (h, w[, 3]) when an ROI is active."""
         if self._roi is not None:
             _, _, w, h = self._roi
         else:
@@ -78,7 +78,7 @@ class SimCameraDevice(CameraDevice):
         """Arm a one-shot pixel-acquisition mask for the *next* snap.
 
         Consumed on the next ``start_sequence()`` snap and cleared, so
-        subsequent snaps return to full coverage unless re-armed —
+        subsequent snaps return to full coverage unless re-armed;
         mirrors the Reset device's edge-trigger semantics. Pass
         ``None`` to disarm before triggering.
 

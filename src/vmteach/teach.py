@@ -4,7 +4,7 @@ Design notes
 ------------
 * ``load_microscope`` defaults to **stepped mode**: no background thread,
   simulated time advances only through :func:`advance`. Same seed + same
-  loop = identical trajectories on every machine — that is what makes the
+  loop = identical trajectories on every machine. That is what makes the
   course exercises reproducible.
 * ``mode="realtime"`` starts the wall-clock RealtimeEngine (idle pause
   disabled so the sample never silently freezes while a learner reads
@@ -12,7 +12,7 @@ Design notes
 * Stimulation is applied when a mask is set (``core.setSLMImage``) and on
   each snap while that mask is displayed. The impulse sets (not adds) the
   cell velocity toward the light, so within one loop iteration this is
-  effectively one stimulus — the feedback-loop frequency is the
+  effectively one stimulus, so the feedback loop frequency is the
   stimulation frequency.
 """
 
@@ -32,10 +32,10 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
     Args:
         backend: Only ``"optogenetic"`` exists in this teaching package.
         n_cells: Number of simulated cells.
-        seed: Random seed — same seed, same experiment, on every machine.
-        mode: ``"stepped"`` (default) — simulated time advances only via
+        seed: Random seed. Same seed, same experiment, on every machine.
+        mode: ``"stepped"`` (default): simulated time advances only via
             :func:`advance`; fully deterministic.
-            ``"realtime"`` — the sample evolves in wall-clock time while
+            ``"realtime"``: the sample evolves in wall-clock time while
             your code runs, like on a real microscope.
         warmup: Pre-compile the physics (numba, cached on disk after the
             first ever run) so the first snap in the exercise is instant.
@@ -43,13 +43,13 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
             (``base_radius``, ``world_size``, ...).
 
     Returns:
-        core: ``UniMMCore`` — the microscope control object. The identical
+        core: ``UniMMCore``, the microscope control object. The identical
             pymmcore API controls real Micro-Manager hardware.
         sim: The simulation handle (for :func:`advance` and ``.reset()``).
     """
     if backend != "optogenetic":
         raise ValueError(
-            f"backend {backend!r} not available — this teaching package "
+            f"backend {backend!r} not available: this teaching package "
             "ships only 'optogenetic' (see the full virtual-microscope "
             "repo for more)")
     if mode not in ("stepped", "realtime"):
@@ -114,7 +114,7 @@ def advance(sim, seconds: float = 1.0, dt: float = 0.05) -> None:
 def detect_nuclei(img: np.ndarray, min_area: int = 20) -> list:
     """Reference detector: nuclei centroids from a DAPI image.
 
-    Nuclei are bright, compact, and — unlike cell bodies — never touch
+    Nuclei are bright, compact, and, unlike cell bodies, never touch
     (cells collide before their nuclei can), so a plain Otsu threshold
     stays reliable even in crowded fields. Use this as the robust
     detection for feedback loops and tracking; write your own detector
@@ -148,11 +148,11 @@ def link_tracks(detections, max_dist: float = 40.0,
 
     Args:
         detections: sequence over frames; each frame a sequence of (x, y).
-        max_dist: gate — maximum linking distance in pixels per frame.
+        max_dist: gate, the maximum linking distance in pixels per frame.
         memory: frames a lost track is kept alive for re-linking.
 
     Returns:
-        Array of rows ``(track_id, t, y, x)`` — the napari Tracks format.
+        Array of rows ``(track_id, t, y, x)``, the napari Tracks format.
     """
     from scipy.optimize import linear_sum_assignment
 
@@ -215,7 +215,7 @@ def letter_mask(char: str, shape: tuple = (512, 512),
         shape: Output image shape ``(height, width)``.
         fill: Approximate fraction of the smaller image dimension the
             letter should span.
-        thickness: Stroke thickness in pixels — keep it wider than a cell
+        thickness: Stroke thickness in pixels. Keep it wider than a cell
             so cells fit on the stroke.
 
     Returns:

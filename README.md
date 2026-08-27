@@ -7,7 +7,7 @@ Micro-Manager) that controls real microscopes.
 
 > **The point:** the simulator models the *microscope–code interaction*, not
 > the biology. It lets you develop, debug, and teach image-processing
-> pipelines and microscope-control logic in minutes on any laptop — then swap
+> pipelines and microscope control logic in minutes on any laptop, then swap
 > in a real microscope by changing only the configuration.
 
 ![Swap virtual and real microscope](docs/images/placeholder_puzzle.svg)
@@ -37,10 +37,10 @@ pip install "virtual-microscope-teaching[gui]"
 ```
 
 Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no
-Micro-Manager device adapters, no C++ — everything is pure Python.
+Micro-Manager device adapters, no C++. Everything is pure Python.
 
 > The very first `load_microscope()` compiles the simulation physics
-> (numba, ~5 s) and caches the result on disk — every later load takes
+> (numba, about 5 s) and caches the result on disk, so every later load takes
 > under a second, including after restarting Python. A full 100-cycle
 > feedback experiment runs in ~2 s.
 
@@ -53,23 +53,23 @@ from vmteach import load_microscope, advance
 core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
 
 for cycle in range(100):
-    # ACQUIRE — identical call on real hardware
+    # ACQUIRE: identical call on real hardware
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
     img = core.getImage()
 
-    # ANALYZE — segment cells (any method works; here Otsu + contours)
+    # ANALYZE: segment cells (any method works; here Otsu + contours)
     _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    # DECIDE — place a light spot above each cell (cells move toward light)
+    # DECIDE: place a light spot above each cell (cells move toward light)
     mask = np.zeros_like(img)
     for c in contours:
         m = cv2.moments(c)
         if m["m00"] > 100:
             cv2.circle(mask, (int(m["m10"]/m["m00"]), int(m["m01"]/m["m00"]) - 15), 11, 255, -1)
 
-    # ACTUATE — identical calls on real hardware: upload the pattern,
+    # ACTUATE, identical calls on real hardware: upload the pattern,
     # then engage the stimulation light path to deliver it
     core.setSLMImage("SLM", mask)
     core.setConfig("Channel", "CyanStim")
@@ -83,17 +83,17 @@ The cell population migrates upward, steered by your loop.
 ## Timing model (read this before designing experiments)
 
 1. **Stimulation is gated on the light path**: `setSLMImage` only *uploads*
-   the pattern — the SLM modulates light that is not on yet. Switching to
+   the pattern, because the SLM modulates light that is not on yet. Switching to
    the `CyanStim` channel engages the stimulation LED and delivers the
    pattern (an impulse that *sets* cell velocity toward the light);
    switching to an imaging channel turns it off. One delivery per loop
-   iteration — the feedback-loop frequency is the stimulation frequency,
+   iteration, so the feedback loop frequency is the stimulation frequency,
    as in pulsed optogenetic protocols. Snapping in `CyanStim` images the
    projected light itself (mask–sample alignment check).
-2. **Stepped mode (default)** — simulated time advances only via
+2. **Stepped mode (default)**: simulated time advances only via
    `advance(sim, seconds=...)`. Same seed + same loop = identical result on
    every machine. This is the course default.
-3. **Real-time mode** — `load_microscope(..., mode="realtime")`: the sample
+3. **Real-time mode**, `load_microscope(..., mode="realtime")`: the sample
    evolves in wall-clock time *while your code runs*, like on a real
    microscope. Your analysis latency becomes part of the experiment.
 
@@ -108,9 +108,9 @@ The cell population migrates upward, steered by your loop.
 
 `core` is a full `pymmcore-plus` core: stage (`setXYPosition`), objectives
 (`setState("Objective", ...)`), four channels (phase-contrast, DAPI,
-membrane, and **CyanStim** — which images the projected SLM light itself,
+membrane, and **CyanStim**, which images the projected SLM light itself,
 for verifying mask–sample alignment like on a real system), exposure,
-SLM — explore with the GUI below.
+SLM. Explore them with the GUI below.
 
 ## napari GUI
 
@@ -123,7 +123,7 @@ viewer = launch_gui(core)   # napari + micro-manager widgets on the virtual scop
 ![napari-micromanager on the virtual microscope](docs/images/napari_gui.png)
 
 Snap, Live (~10 fps of crawling simulated cells), channel and objective
-dropdowns, exposure, MDA — every control issues the same core API calls your
+dropdowns, exposure, MDA: every control issues the same core API calls your
 scripts make. The GUI and the script are two faces of one microscope. See the
 [GUI walkthrough](docs/gui_walkthrough.md) for the click-by-click tour, and
 `vmteach.gui.show_results(...)` to explore finished experiments (images,
@@ -142,5 +142,5 @@ simulator's 35 specimen backends.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). If you use this in teaching or research,
+MIT, see [LICENSE](LICENSE). If you use this in teaching or research,
 please cite the FARO paper (see [CITATION.cff](CITATION.cff)).

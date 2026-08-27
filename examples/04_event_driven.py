@@ -7,7 +7,7 @@
 # GUI-compatible (the napari-micromanager MDA panel builds the same events).
 #
 # The trick for feedback experiments: `run_mda()` accepts any *iterable* of
-# events — including a Queue that is being filled WHILE the acquisition
+# events, including a Queue that is being filled WHILE the acquisition
 # runs. Analysis decides, event by event, what the microscope does next.
 # This adapts the Analyzer/Controller pattern from the pymmcore-plus guide:
 # https://pymmcore-plus.github.io/pymmcore-plus/guides/event_driven_acquisition/
@@ -26,7 +26,7 @@ from useq import MDAEvent
 from vmteach import detect_nuclei, load_microscope
 
 # Real-time mode: the MDA engine paces acquisition by wall clock
-# (min_start_time), and the sample evolves in wall clock — like on
+# (min_start_time), and the sample evolves in wall clock, like on
 # real hardware.
 core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
                             mode="realtime")
@@ -68,14 +68,16 @@ class Controller:
         ch = event.channel.config if event.channel else None
 
         if ch == "DAPI":
-            # analysis frame: segment, upload the pattern, then declare the
-            # stimulation as an EVENT. In the manual loop we had to
-            # choreograph the light path ourselves (setConfig on, off, on);
-            # here we just say "channel=CyanStim" and the engine switches
-            # the hardware — and records an image of the projected light.
+            # Analysis frame: segment, then declare the whole stimulation
+            # as ONE event. The event carries both the light path
+            # (channel="CyanStim") and the pattern (slm_image=mask). The
+            # engine switches the LED and filter, uploads the pattern to
+            # the SLM, delivers the light, and records an image of the
+            # projected pattern. In the manual loop all of that was our
+            # own choreography of core calls; here it is a declaration.
             result = self._analyzer.run(img)
-            self._core.setSLMImage("SLM", result["mask"])
-            self._queue.put(MDAEvent(index={"t": t}, channel=STIM))
+            self._queue.put(MDAEvent(index={"t": t}, channel=STIM,
+                                     slm_image=result["mask"]))
             print(f"frame {t + 1}/{self._n_frames}: "
                   f"{result['n_cells']} cells", end="\r")
         else:
@@ -91,7 +93,7 @@ class Controller:
                 ))
 
     def run(self):
-        # a Queue is not iterable — iter(get, sentinel) makes it one
+        # a Queue is not iterable; iter(get, sentinel) makes it one
         self._core.run_mda(iter(self._queue.get, self.STOP))
         # seed the acquisition with the first event; analysis takes over
         self._queue.put(MDAEvent(index={"t": 0}, channel=DAPI,
@@ -99,7 +101,7 @@ class Controller:
 
 
 # %%
-# Run it. Note there is NO acquisition loop in our code anymore — the MDA
+# Run it. Note there is NO acquisition loop in our code anymore. The MDA
 # engine drives the microscope; our code only reacts to frames and decides
 # the next event.
 y_before = sim.centers[:, 1].copy()
@@ -119,16 +121,16 @@ print(f"\nmean displacement after {N_FRAMES} frames: {dy.mean():+.1f} px "
 
 # %%
 # Why bother, when the for-loop worked fine?
-#  - the light-path choreography disappeared: stimulation is just an event
-#    with channel="CyanStim" — the engine switches LED + filter, delivers
-#    the pattern, and even logs an image of the projected light
+#  - the light choreography disappeared: one declared event carries the
+#    channel AND the SLM pattern; the engine switches the hardware,
+#    delivers the light, and logs an image of the projected pattern
 #  - useq MDAEvents carry the full acquisition vocabulary (z-stacks,
 #    positions, exposure, channels) in one declarative object
 #  - the engine handles hardware timing/synchronization; events are logged
 #    and reproducible
-#  - the identical Controller runs on real hardware — swap the core
+#  - the identical Controller runs on real hardware; just swap the core
 #  - a GUI (napari-micromanager's MDA panel) and your feedback logic can
 #    produce events for the same engine
 #
 # On real microscopes this is the recommended architecture for feedback
-# experiments — see rtm-pymmcore / FARO for a full implementation.
+# experiments. See rtm-pymmcore or FARO for a full implementation.

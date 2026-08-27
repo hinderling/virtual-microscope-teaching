@@ -5,10 +5,10 @@ polygon smoothing + cv2 fills (~2 ms/frame). Renders the full world once per
 snap for the requested channel; the sim crops the viewport afterwards.
 
 Channels (mode):
-    0  phase-contrast  — dark background, gray cell body, brighter rim,
+    0  phase-contrast:  dark background, gray cell body, brighter rim,
                           darker nucleus
-    1  DAPI            — nuclei bright on black
-    2  membrane        — cell outline bright on black
+    1  DAPI:            nuclei bright on black
+    2  membrane:        cell outline bright on black
 
 Stimulated cells get a slightly brighter rim in phase-contrast, so learners
 can see which cells received light.

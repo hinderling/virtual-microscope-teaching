@@ -1,4 +1,4 @@
-"""SimulationBridge — glue between pymmcore devices and the simulation.
+"""SimulationBridge: glue between pymmcore devices and the simulation.
 
 Device adapters (camera, stage, SLM, state devices) hold no simulation
 logic; they translate pymmcore calls into the small interface below. This
@@ -72,7 +72,7 @@ class SimulationBridge:
     def set_slm_mask(self, mask: np.ndarray) -> None:
         """Called by the SLM device: upload the pattern.
 
-        Delivery is gated on the light path — if the stimulation light is
+        Delivery is gated on the light path: if the stimulation light is
         already on the pattern acts immediately, otherwise it waits until
         the channel is switched to "CyanStim" (see update_state).
         """

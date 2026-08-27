@@ -4,13 +4,13 @@ Requires the ``gui`` extra:  pip install "virtual-microscope-teaching[gui]"
 
 Two entry points:
 
-* :func:`launch_gui` — opens napari with the napari-micromanager widgets
+* :func:`launch_gui` opens napari with the napari-micromanager widgets
   bound to the *virtual* microscope core. Every button in the GUI issues
   the same pymmcore API calls your scripts make: Snap ⇒ ``core.snapImage()``,
   the objective dropdown ⇒ ``core.setState("Objective", ...)``, and so on.
   Snaps executed by a running script appear live in the preview layer.
 
-* :func:`show_results` — loads a finished experiment (images, stimulation
+* :func:`show_results` loads a finished experiment (images, stimulation
   masks, tracks) into napari layers for interactive exploration.
 """
 
@@ -24,7 +24,7 @@ def launch_gui(core, *, title: str = "Virtual Microscope"):
 
     Args:
         core: The core returned by :func:`vmteach.load_microscope` (or any
-            ``CMMCorePlus``-compatible core — including a real microscope).
+            ``CMMCorePlus``-compatible core, including a real microscope).
 
     Returns:
         The napari ``Viewer``. Call ``napari.run()`` afterwards when using
@@ -59,7 +59,7 @@ def show_results(images, masks=None, centroids=None, segmentations=None,
     import napari
 
     if viewer is None:
-        viewer = napari.Viewer(title=f"Results — {name}")
+        viewer = napari.Viewer(title=f"Results: {name}")
 
     viewer.add_image(np.stack(images), name=f"{name}: images",
                      colormap="gray_r")

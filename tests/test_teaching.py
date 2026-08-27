@@ -105,7 +105,7 @@ def test_reset_clears_leftover_slm_mask(scope):
     advance(sim, 0.05, dt=0.05)
     core.snapImage()
     # cells moved only by brownian noise; a full-field stimulus would
-    # protrude every cell — check velocities are not uniformly boosted
+    # protrude every cell; check velocities are not uniformly boosted
     assert not getattr(sim._cells[0], "is_stimulated", False)
     assert np.allclose(p0, sim.centers, atol=5.0)
 
@@ -201,11 +201,11 @@ def test_event_driven_mda_queue():
         frames.append((t, ch))
         if ch == "DAPI":
             cells = detect_cells(img, min_area=20)
-            core.setSLMImage("SLM", steer_mask(cells))
-            # stimulation = just another declared event (engine switches
-            # the light path for us)
+            # stimulation = one declared event carrying the light path AND
+            # the pattern; no manual setSLMImage or setConfig needed
             q.put(MDAEvent(index={"t": t},
-                           channel={"config": "CyanStim", "group": "Channel"}))
+                           channel={"config": "CyanStim", "group": "Channel"},
+                           slm_image=steer_mask(cells)))
         elif t + 1 >= 3:
             q.put(STOP)
         else:

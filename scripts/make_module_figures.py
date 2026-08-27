@@ -24,19 +24,38 @@ from vmteach import (advance, detect_nuclei, letter_mask, link_tracks,
 OUT = sys.argv[1] if len(sys.argv) > 1 else "docs/images"
 
 BLACK = (10, 10, 10)
+GUTTER = 14      # white gap between concatenated panels
+BORDER = 2       # black border around each image
 
 
-def label(panel, text, scale=0.55):
-    """One or more label lines, sized to stay inside a 512-px panel."""
-    lines = [text] if isinstance(text, str) else list(text)
-    y = 26
-    for line in lines:
-        (w, h), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
-        s = scale * min(1.0, (panel.shape[1] - 24) / max(w, 1))
-        cv2.putText(panel, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, s,
-                    BLACK, 2, cv2.LINE_AA)
-        y += h + 12
-    return panel
+def frame_panel(img_rgb, title):
+    """Panel = white title strip above the image, black border around it.
+
+    The title is a single line, scaled down if needed to fit the panel
+    width. Text sits above the image so it never covers the data.
+    """
+    bordered = cv2.copyMakeBorder(img_rgb, BORDER, BORDER, BORDER, BORDER,
+                                  cv2.BORDER_CONSTANT, value=BLACK)
+    w = bordered.shape[1]
+    header = np.full((36, w, 3), 255, np.uint8)
+    (tw, _), _ = cv2.getTextSize(title, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+    sc = 0.55 * min(1.0, (w - 12) / max(tw, 1))
+    cv2.putText(header, title, (4, 25), cv2.FONT_HERSHEY_SIMPLEX, sc,
+                BLACK, 2, cv2.LINE_AA)
+    return np.vstack([header, bordered])
+
+
+def hcat(panels):
+    """Concatenate panels horizontally with a white gutter between them."""
+    h = max(p.shape[0] for p in panels)
+    padded = [cv2.copyMakeBorder(p, 0, h - p.shape[0], 0, 0,
+                                 cv2.BORDER_CONSTANT, value=(255, 255, 255))
+              for p in panels]
+    gap = np.full((h, GUTTER, 3), 255, np.uint8)
+    out = [padded[0]]
+    for p in padded[1:]:
+        out.extend([gap, p])
+    return np.hstack(out)
 
 
 def steer_mask(cells, dy=-15, r=11):
@@ -91,16 +110,17 @@ def fig_steering():
     sim.reset()
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
-    p1 = label(overlay(core.getImage(), mask0), "cycle 1 - mask (blue)")
+    p1 = frame_panel(overlay(core.getImage(), mask0),
+                     "Cycle 1: computed stimulation mask (blue)")
 
     # panel 2: final frame with linked tracks
-    p2 = overlay(img_final, np.zeros_like(img_final))
+    img2 = overlay(img_final, np.zeros_like(img_final))
     rows = link_tracks(det)
-    draw_tracks(p2, rows, lambda tr: (30, 110, 30))
-    label(p2, ["cycle 100 - tracks", "(population moved up)"])
+    draw_tracks(img2, rows, lambda tr: (30, 110, 30))
+    p2 = frame_panel(img2, "Cycle 100: tracks, the population moved up")
 
     cv2.imwrite(f"{OUT}/act2_steering_expected.png",
-                cv2.cvtColor(np.hstack([p1, p2]), cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(hcat([p1, p2]), cv2.COLOR_RGB2BGR))
 
 
 def fig_split():
@@ -125,9 +145,10 @@ def fig_split():
     draw_tracks(panel, rows, color)
     for y in range(0, 512, 14):                # dashed midline
         cv2.line(panel, (256, y), (256, min(y + 7, 511)), BLACK, 1)
-    label(panel, ["cycle 100 - tracks", "blue: steered up   red: steered down"])
+    out = frame_panel(panel,
+                      "Cycle 100: blue tracks steered up, red steered down")
     cv2.imwrite(f"{OUT}/act2_split_expected.png",
-                cv2.cvtColor(panel, cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
 
 
 def fig_letter():
@@ -174,15 +195,15 @@ def fig_letter():
             core.snapImage()
             p = overlay(core.getImage(), target, color=(255, 120, 120),
                         alpha=0.22)
-            panels.append(label(p, f"cycle {i + 1}"))
+            panels.append(frame_panel(p, f"Cycle {i + 1}"))
         advance(sim, 1.0)
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
     on = sum(1 for cx, cy in cells if target[cy, cx] > 0)
     p = overlay(core.getImage(), target, color=(255, 120, 120), alpha=0.22)
-    panels.append(label(p, [f"cycle 500", f"{on}/{len(cells)} cells on target"]))
+    panels.append(frame_panel(p, f"Cycle 500: {on}/{len(cells)} cells on target"))
     cv2.imwrite(f"{OUT}/exercise_letter_expected.png",
-                cv2.cvtColor(np.hstack(panels), cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(hcat(panels), cv2.COLOR_RGB2BGR))
 
 
 def fig_pipeline():
@@ -243,16 +264,9 @@ def fig_pipeline():
         g = 255 - img if invert else img
         return np.stack([g] * 3, axis=-1)
 
-    def small_label(panel, text):
-        (w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.58, 2)
-        sc = 0.58 * min(1.0, (panel.shape[1] - 16) / max(w, 1))
-        cv2.putText(panel, text, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, sc,
-                    BLACK, 2, cv2.LINE_AA)
-        return panel
-
-    p1 = small_label(to_rgb(crop(phase0)), "1. acquire: phase-contrast")
-    p2 = small_label(to_rgb(crop(dapi0)), "2. acquire: nuclei (DAPI)")
-    p3 = small_label(to_rgb(crop(binary0)), "3. threshold (Otsu)")
+    p1 = frame_panel(to_rgb(crop(phase0)), "1. Acquire: phase contrast")
+    p2 = frame_panel(to_rgb(crop(dapi0)), "2. Acquire: nuclei (DAPI)")
+    p3 = frame_panel(to_rgb(crop(binary0)), "3. Threshold (Otsu)")
 
     # panel 4: connected components + centroids (at t = 0)
     n_lbl, lbl_img = cv2.connectedComponents((binary0 > 0).astype(np.uint8))
@@ -260,16 +274,16 @@ def fig_pipeline():
     palette = [(200, 60, 60), (60, 140, 60), (60, 80, 200), (180, 140, 40)]
     for i in range(1, n_lbl):
         lbl_rgb[lbl_img == i] = palette[(i - 1) % len(palette)]
-    p4 = cv2.resize(lbl_rgb[cy0:cy0 + box, cx0:cx0 + box],
-                    (box * SC, box * SC), interpolation=cv2.INTER_NEAREST)
+    img4 = cv2.resize(lbl_rgb[cy0:cy0 + box, cx0:cx0 + box],
+                      (box * SC, box * SC), interpolation=cv2.INTER_NEAREST)
     for cx, cy in cells0:
         if cx0 < cx < cx0 + box and cy0 < cy < cy0 + box:
-            cv2.drawMarker(p4, ((cx - cx0) * SC, (cy - cy0) * SC), BLACK,
+            cv2.drawMarker(img4, ((cx - cx0) * SC, (cy - cy0) * SC), BLACK,
                            cv2.MARKER_CROSS, 18, 2)
-    small_label(p4, "4. label + measure centroids")
+    p4 = frame_panel(img4, "4. Label and measure centroids")
 
-    # panel 5: tracks from the 25-cycle run, over the t=0 image
-    p5 = to_rgb(crop(phase0))
+    # panel 5: tracks from the time-lapse, over the t=0 image
+    img5 = to_rgb(crop(phase0))
     rows = link_tracks(det)
     for tid in np.unique(rows[:, 0]):
         tr = rows[rows[:, 0] == tid]
@@ -278,10 +292,10 @@ def fig_pipeline():
         pts = tr[np.argsort(tr[:, 1])][:, 2:]
         poly = np.column_stack([(pts[:, 1] - cx0) * SC,
                                 (pts[:, 0] - cy0) * SC]).astype(np.int32)
-        cv2.polylines(p5, [poly], False, (30, 110, 30), 3, cv2.LINE_AA)
-    small_label(p5, "5. link into tracks")
+        cv2.polylines(img5, [poly], False, (30, 110, 30), 3, cv2.LINE_AA)
+    p5 = frame_panel(img5, "5. Link into tracks")
 
-    strip = np.hstack([p1, p2, p3, p4, p5])
+    strip = hcat([p1, p2, p3, p4, p5])
     cv2.imwrite(f"{OUT}/pipeline_explained.png",
                 cv2.cvtColor(strip, cv2.COLOR_RGB2BGR))
 
@@ -300,37 +314,26 @@ def fig_stim_logic():
     # 1. planned: segmentation centroids + spots over phase-contrast
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
-    p1 = overlay(core.getImage(), mask)
+    img1 = overlay(core.getImage(), mask)
     for cx, cy in cells:
-        cv2.drawMarker(p1, (cx, cy), (0, 150, 150), cv2.MARKER_CROSS, 12, 2)
-    label(p1, ["1. segment + place spots", "(software overlay)"])
-
-    def white_label(panel, lines):
-        y = 26
-        for line in lines:
-            (w, h), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX,
-                                        0.55, 2)
-            sc = 0.55 * min(1.0, (panel.shape[1] - 24) / max(w, 1))
-            cv2.putText(panel, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, sc,
-                        (235, 235, 235), 2, cv2.LINE_AA)
-            y += h + 12
-        return panel
+        cv2.drawMarker(img1, (cx, cy), (0, 150, 150), cv2.MARKER_CROSS, 12, 2)
+    p1 = frame_panel(img1, "1. Segment and place spots (software overlay)")
 
     # 2. the binary pattern as uploaded to the SLM/DMD (white = light on)
-    p2 = np.stack([mask] * 3, axis=-1)
-    white_label(p2, ["2. binary mask uploaded", "to the SLM/DMD (white = light)"])
+    p2 = frame_panel(np.stack([mask] * 3, axis=-1),
+                     "2. Binary mask on the SLM/DMD, white = light")
 
     # 3. the projected light, imaged in the CyanStim channel (cyan = light)
     core.setSLMImage("SLM", mask)
     core.setConfig("Channel", "CyanStim")   # light on: deliver + image
     core.snapImage()
     stim = core.getImage().astype(np.float32)
-    p3 = np.stack([np.zeros_like(stim), stim, stim],
-                  axis=-1).astype(np.uint8)          # cyan on black
-    white_label(p3, ["3. projected light imaged", "in the CyanStim channel"])
+    img3 = np.stack([np.zeros_like(stim), stim, stim],
+                    axis=-1).astype(np.uint8)        # cyan on black
+    p3 = frame_panel(img3, "3. Projected light in the CyanStim channel")
 
     cv2.imwrite(f"{OUT}/stimulation_logic.png",
-                cv2.cvtColor(np.hstack([p1, p2, p3]), cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(hcat([p1, p2, p3]), cv2.COLOR_RGB2BGR))
 
 
 if __name__ == "__main__":

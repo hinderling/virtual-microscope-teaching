@@ -12,7 +12,7 @@ from vmteach import load_microscope, advance, overlay
 
 # %%
 # Load the virtual microscope.
-# `core` is a pymmcore-plus object — the same API controls real microscopes.
+# `core` is a pymmcore-plus object; the same API controls real microscopes.
 # `sim` is a handle to the simulation (used only to advance time and reset).
 # The microscope starts in deterministic "stepped" mode: the sample only
 # evolves when we call advance(), so everyone gets the same result.
@@ -31,7 +31,7 @@ plt.title(f"{img.shape} {img.dtype}")
 
 # %%
 # ANALYZE: segment the cells with an Otsu threshold and find their centroids.
-# Any segmentation works here — the loop does not care how the objects
+# Any segmentation works here. The loop does not care how the objects
 # were found, only that it gets a list of positions.
 
 
@@ -61,7 +61,7 @@ for cx, cy, _ in cells:
 # %%
 # DECIDE: build a stimulation mask.
 # Stimulated cells protrude toward the light, so a spot placed ABOVE a cell
-# pulls it UPWARD. The mask is a plain uint8 image — white pixels = light on.
+# pulls it UPWARD. The mask is a plain uint8 image, white pixels = light on.
 
 
 def build_steer_mask(cells, direction_px=-15, spot_radius=11, shape=(512, 512)):
@@ -75,21 +75,21 @@ def build_steer_mask(cells, direction_px=-15, spot_radius=11, shape=(512, 512)):
 
 mask = build_steer_mask(cells)
 plt.imshow(overlay(img, mask))
-plt.title("Stimulation mask (blue) — spots above each cell")
+plt.title("Stimulation mask (blue): spots above each cell")
 
 # %%
-# ACTUATE — two steps, exactly like on real hardware:
-# 1. upload the pattern to the SLM (this alone does nothing — the SLM only
-#    *modulates* light that isn't on yet)
+# ACTUATE, in two steps, exactly like on real hardware:
+# 1. upload the pattern to the SLM. This alone does nothing, because the
+#    SLM only *modulates* light that is not on yet
 core.setSLMImage("SLM", mask)
 # 2. engage the stimulation light path: switching to the CyanStim channel
-#    turns on the stimulation LED — NOW the pattern is delivered and the
+#    turns on the stimulation LED. NOW the pattern is delivered and the
 #    illuminated cells receive a protrusion + motility impulse
 core.setConfig("Channel", "CyanStim")
 
 # %%
 # SEE THE LIGHT: on a real microscope the stimulation light is physically
-# projected onto the sample — and you can image it. Switch to the CyanStim
+# projected onto the sample, and you can image it. Switch to the CyanStim
 # channel (stimulation LED + matching emission filter) and snap: the SLM
 # pattern appears, with optics halo and noise, over a faint reflection of
 # the cells. This is how you verify mask–sample alignment at the scope.
@@ -112,7 +112,7 @@ core.setConfig("Channel", "phase-contrast")
 # Note the light choreography each cycle: switching to phase-contrast for the
 # acquisition turns the stimulation light OFF; after uploading the new mask,
 # switching to CyanStim turns it back ON. Forget the switch and nothing
-# happens — a classic real-microscope debugging moment.
+# happens, which is a classic debugging moment at a real microscope.
 # advance(sim, seconds=1.0) advances the simulation deterministically;
 # on real hardware this would simply be the interval between acquisitions.
 
@@ -138,7 +138,7 @@ print("Mean y position: first frame "
 # %%
 # PER-OBJECT DECISIONS: steer each cell differently based on a measurement.
 # Cells in the left half of the field go UP, cells in the right half go DOWN.
-# Only the DECIDE step changes — acquisition and actuation stay identical.
+# Only the DECIDE step changes; acquisition and actuation stay identical.
 
 
 def build_split_mask(cells, offset_px=15, spot_radius=11, shape=(512, 512)):
@@ -170,7 +170,7 @@ plt.title("Left half steered up, right half steered down")
 # %%
 # Appreciate that a single scalar measurement (here: x position) is enough to
 # give every cell its own treatment. Any measured feature works the same way:
-# size, intensity, shape, biosensor activity — this is what makes feedback
+# size, intensity, shape, biosensor activity. This is what makes feedback
 # experiments selective in ways manual ROI drawing cannot be.
 
 # %%
@@ -184,6 +184,6 @@ plt.title("Left half steered up, right half steered down")
 # sample evolves in wall-clock time while your code runs:
 #     core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
 #                                 mode="realtime")
-# Now the duration of YOUR analysis code changes the experiment — add
+# Now the duration of YOUR analysis code changes the experiment. Add
 # time.sleep(2) inside the loop and watch the steering degrade. This is
 # exactly the situation on a real microscope.

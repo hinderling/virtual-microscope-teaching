@@ -1,5 +1,5 @@
 # %%
-# Assemble cells into a letter — validated reference solution
+# Assemble cells into a letter: validated reference solution
 # (This is the solution to the course exercise; try it yourself first!)
 # See the NEUBIAS module exercise for the step-by-step hint ladder.
 
@@ -17,7 +17,7 @@ target = letter_mask("L", fill=0.65, thickness=55)
 
 # %%
 # Routing map: aim cells at the CORE of the letter stroke (distance-transform
-# "deep" pixels), not its edge — a cell stopping on the edge is half outside.
+# "deep" pixels), not its edge; a cell stopping on the edge is half outside.
 dist_in = cv2.distanceTransform(target, cv2.DIST_L2, 5)
 DEEP = 14
 deep = (dist_in >= DEEP).astype(np.uint8) * 255
@@ -26,7 +26,8 @@ deep_pts_all = np.column_stack(np.nonzero(deep)[::-1])
 
 # Detect NUCLEI in the DAPI channel: nuclei never touch (cells collide
 # first), so simple thresholding stays reliable even when cells crowd the
-# letter — the same reason real workflows segment nuclei, not cell bodies.
+# letter. This is the same reason real workflows segment nuclei, not cell
+# bodies.
 def detect_cells(img, min_area=20):
     _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -84,7 +85,7 @@ core.snapImage()
 img = core.getImage()
 
 # %%
-# Metrics: cells-on-target is the fair one — pixel coverage cannot reach
+# Metrics: cells-on-target is the fair one, because pixel coverage cannot reach
 # 100% because cells keep a collision distance (like real cells).
 _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 coverage = (binary & target).sum() / target.sum()

@@ -4,11 +4,11 @@
 # Install (once): pip install "virtual-microscope-teaching[gui]"
 # Run this locally (napari needs a display). In Jupyter, run `%gui qt` first.
 #
-# napari-micromanager gives you the familiar microscope-control GUI —
-# Snap / Live buttons, channel and objective dropdowns, exposure — except
-# the "microscope" behind it is simulated. Every widget issues the same
-# pymmcore API calls your scripts make. That equivalence is the point of
-# this example.
+# napari-micromanager gives you the familiar microscope control GUI:
+# Snap and Live buttons, channel and objective dropdowns, exposure. The
+# only difference is that the "microscope" behind it is simulated. Every
+# widget issues the same pymmcore API calls your scripts make. That
+# equivalence is the point of this example.
 
 from vmteach import load_microscope, advance
 from vmteach.gui import launch_gui
@@ -28,7 +28,7 @@ viewer = launch_gui(core)
 #  5. Change Exposure                 -> brighter / noisier image
 
 # %%
-# Now do EXACTLY the same things from code — watch the GUI react:
+# Now do EXACTLY the same things from code, and watch the GUI react:
 core.snapImage()                       # = pressing "Snap"  (preview updates!)
 core.setState("Objective", 2)          # = choosing "40x" in the dropdown
 core.setConfig("Channel", "DAPI")      # = choosing "DAPI" in the dropdown
@@ -37,7 +37,7 @@ core.snapImage()
 
 # The dropdowns in the GUI now show 40x / DAPI / 100 ms: the GUI is not
 # "another program", it is a viewer onto the same core object your script
-# controls. On a real microscope this is identical — napari-micromanager
+# controls. On a real microscope this is identical: napari-micromanager
 # in front, your feedback script behind, one shared core.
 
 # %%
@@ -48,5 +48,5 @@ core.setExposure(50.0)
 
 # %%
 # While a feedback loop runs, every core.snapImage() lands in the same
-# preview layer — you can watch your smart-acquisition script "click"
+# preview layer, so you can watch your smart acquisition script "click"
 # through the experiment live. Try running example 01 with this GUI open.

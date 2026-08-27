@@ -1,4 +1,4 @@
-"""RealtimeEngine — Background thread that drives autonomous simulation dynamics.
+"""RealtimeEngine: background thread that drives autonomous simulation dynamics.
 
 Runs sim.step(dt) on a background thread at a configurable tick rate.
 snap_frame() is wrapped with a lock so rendering and stepping never overlap.
@@ -120,7 +120,7 @@ class RealtimeEngine:
             # Auto-pause after idle timeout (no snaps for N seconds)
             if (self._idle_timeout > 0 and self._last_snap_time > 0
                     and time.monotonic() - self._last_snap_time > self._idle_timeout):
-                logger.info("RealtimeEngine idle timeout — auto-pausing")
+                logger.info("RealtimeEngine idle timeout, auto-pausing")
                 self._paused = True
                 self._last_snap_time = 0.0  # reset so next snap triggers resume
                 last = time.monotonic()
