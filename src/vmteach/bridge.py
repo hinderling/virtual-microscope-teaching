@@ -65,9 +65,18 @@ class SimulationBridge:
     # ── SLM ─────────────────────────────────────────────────────────────
 
     def set_slm_mask(self, mask: np.ndarray) -> None:
-        """Called by the SLM device; applies stimulation immediately."""
+        """Called by the SLM device; applies stimulation immediately.
+
+        In realtime mode the engine steps the sim on a background thread,
+        so the stimulation update takes the engine lock (callers may be on
+        yet another thread, e.g. an MDA frameReady callback).
+        """
         self._current_slm_mask = mask
-        self._sim._handle_mask(mask)
+        if self._engine is not None:
+            with self._engine.lock:
+                self._sim._handle_mask(mask)
+        else:
+            self._sim._handle_mask(mask)
 
     def get_slm_mask(self) -> np.ndarray:
         if self._current_slm_mask is not None:

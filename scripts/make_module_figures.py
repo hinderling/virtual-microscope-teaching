@@ -26,9 +26,16 @@ OUT = sys.argv[1] if len(sys.argv) > 1 else "docs/images"
 BLACK = (10, 10, 10)
 
 
-def label(panel, text):
-    cv2.putText(panel, text, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                BLACK, 2, cv2.LINE_AA)
+def label(panel, text, scale=0.55):
+    """One or more label lines, sized to stay inside a 512-px panel."""
+    lines = [text] if isinstance(text, str) else list(text)
+    y = 26
+    for line in lines:
+        (w, h), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+        s = scale * min(1.0, (panel.shape[1] - 24) / max(w, 1))
+        cv2.putText(panel, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, s,
+                    BLACK, 2, cv2.LINE_AA)
+        y += h + 12
     return panel
 
 
@@ -89,7 +96,7 @@ def fig_steering():
     p2 = overlay(img_final, np.zeros_like(img_final))
     rows = link_tracks(det)
     draw_tracks(p2, rows, lambda tr: (30, 110, 30))
-    label(p2, "cycle 100 - tracks (population moved up)")
+    label(p2, ["cycle 100 - tracks", "(population moved up)"])
 
     cv2.imwrite(f"{OUT}/act2_steering_expected.png",
                 cv2.cvtColor(np.hstack([p1, p2]), cv2.COLOR_RGB2BGR))
@@ -117,7 +124,7 @@ def fig_split():
     draw_tracks(panel, rows, color)
     for y in range(0, 512, 14):                # dashed midline
         cv2.line(panel, (256, y), (256, min(y + 7, 511)), BLACK, 1)
-    label(panel, "cycle 100 - left half up (blue), right half down (red)")
+    label(panel, ["cycle 100 - tracks", "blue: steered up   red: steered down"])
     cv2.imwrite(f"{OUT}/act2_split_expected.png",
                 cv2.cvtColor(panel, cv2.COLOR_RGB2BGR))
 
@@ -171,13 +178,120 @@ def fig_letter():
     core.snapImage()
     on = sum(1 for cx, cy in cells if target[cy, cx] > 0)
     p = overlay(core.getImage(), target, color=(255, 120, 120), alpha=0.22)
-    panels.append(label(p, f"cycle 500 - {on}/{len(cells)} cells on target"))
+    panels.append(label(p, [f"cycle 500", f"{on}/{len(cells)} cells on target"]))
     cv2.imwrite(f"{OUT}/exercise_letter_expected.png",
                 cv2.cvtColor(np.hstack(panels), cv2.COLOR_RGB2BGR))
+
+
+def fig_pipeline():
+    """From pixels to decisions, on a small crop with ~3 cells.
+
+    All panels show the experiment start (t=0); the tracks panel overlays
+    where the cells went during the following 25 steering cycles.
+    """
+    # seed 18 has a clean, isolated 3-cell neighbourhood for the crop
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=18,
+                                warmup=False)
+
+    def snap(ch):
+        core.setConfig("Channel", ch)
+        core.snapImage()
+        return core.getImage()
+
+    # ── capture everything at t = 0 ─────────────────────────────────────
+    phase0 = snap("phase-contrast")
+    dapi0 = snap("DAPI")
+    _, binary0 = cv2.threshold(dapi0, 0, 255,
+                               cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    cells0 = detect_nuclei(dapi0)
+
+    # crop window with exactly 3 nuclei, clear of the label area (top 55 px)
+    box = 170
+    cx0 = cy0 = None
+    for y in range(0, 512 - box, 8):
+        for x in range(0, 512 - box, 8):
+            inside = [(cx, cy) for cx, cy in cells0
+                      if x + 30 < cx < x + box - 30
+                      and y + 60 < cy < y + box - 30]
+            n_total = sum(1 for cx, cy in cells0
+                          if x - 20 < cx < x + box + 20
+                          and y - 20 < cy < y + box + 20)
+            if len(inside) == 3 and n_total == 3:
+                cx0, cy0 = x, y
+                break
+        if cx0 is not None:
+            break
+    assert cx0 is not None, "no 3-cell crop found — adjust box/seed"
+
+    # ── steering run to accumulate tracks ───────────────────────────────
+    det = []
+    for _ in range(60):
+        cells = detect_nuclei(snap("DAPI"))
+        det.append(cells)
+        core.setSLMImage("SLM", steer_mask(cells))
+        advance(sim, 1.0)
+
+    SC = 3  # upscale factor for legibility
+
+    def crop(img):
+        c = img[cy0:cy0 + box, cx0:cx0 + box]
+        return cv2.resize(c, (box * SC, box * SC),
+                          interpolation=cv2.INTER_NEAREST)
+
+    def to_rgb(img, invert=True):
+        g = 255 - img if invert else img
+        return np.stack([g] * 3, axis=-1)
+
+    def small_label(panel, text):
+        cv2.putText(panel, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+                    BLACK, 2, cv2.LINE_AA)
+        return panel
+
+    p1 = small_label(to_rgb(crop(phase0)), "1. acquire: phase-contrast")
+    p2 = small_label(to_rgb(crop(dapi0)), "2. acquire: nuclei (DAPI)")
+    p3 = small_label(to_rgb(crop(binary0)), "3. threshold (Otsu)")
+
+    # panel 4: connected components + centroids (at t = 0)
+    n_lbl, lbl_img = cv2.connectedComponents((binary0 > 0).astype(np.uint8))
+    lbl_rgb = np.full((512, 512, 3), 255, np.uint8)
+    palette = [(200, 60, 60), (60, 140, 60), (60, 80, 200), (180, 140, 40)]
+    for i in range(1, n_lbl):
+        lbl_rgb[lbl_img == i] = palette[(i - 1) % len(palette)]
+    p4 = cv2.resize(lbl_rgb[cy0:cy0 + box, cx0:cx0 + box],
+                    (box * SC, box * SC), interpolation=cv2.INTER_NEAREST)
+    for cx, cy in cells0:
+        if cx0 < cx < cx0 + box and cy0 < cy < cy0 + box:
+            cv2.drawMarker(p4, ((cx - cx0) * SC, (cy - cy0) * SC), BLACK,
+                           cv2.MARKER_CROSS, 18, 2)
+    small_label(p4, "4. label + measure centroids")
+
+    # panel 5: tracks from the 25-cycle run, over the t=0 image
+    p5 = to_rgb(crop(phase0))
+    rows = link_tracks(det)
+    for tid in np.unique(rows[:, 0]):
+        tr = rows[rows[:, 0] == tid]
+        if len(tr) < 5:
+            continue
+        pts = tr[np.argsort(tr[:, 1])][:, 2:]
+        poly = np.column_stack([(pts[:, 1] - cx0) * SC,
+                                (pts[:, 0] - cy0) * SC]).astype(np.int32)
+        cv2.polylines(p5, [poly], False, (30, 110, 30), 3, cv2.LINE_AA)
+    small_label(p5, "5. link into tracks")
+
+    # panel 6: the decision at t = 0
+    p6 = overlay(phase0, steer_mask(cells0))[cy0:cy0 + box, cx0:cx0 + box]
+    p6 = cv2.resize(p6, (box * SC, box * SC),
+                    interpolation=cv2.INTER_NEAREST)
+    small_label(p6, "6. decide: place light spots")
+
+    grid = np.vstack([np.hstack([p1, p2, p3]), np.hstack([p4, p5, p6])])
+    cv2.imwrite(f"{OUT}/pipeline_explained.png",
+                cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
 
 
 if __name__ == "__main__":
     fig_steering()
     fig_split()
     fig_letter()
+    fig_pipeline()
     print("module figures written to", OUT)

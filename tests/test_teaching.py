@@ -134,5 +134,48 @@ def test_realtime_mode_advances_on_its_own():
     p0 = sim.centers.copy()
     time.sleep(1.0)
     core.snapImage()
-    assert not np.array_equal(p0, sim.centers), \
-        "realtime mode: sample should evolve in wall-clock time"
+    moved = not np.array_equal(p0, sim.centers)
+    # stop the background engine so no thread lingers at interpreter exit
+    from vmteach.bridge import GLOBAL_BRIDGE
+    if GLOBAL_BRIDGE is not None and GLOBAL_BRIDGE._engine is not None:
+        GLOBAL_BRIDGE._engine.stop()
+    assert moved, "realtime mode: sample should evolve in wall-clock time"
+
+
+def test_event_driven_mda_queue():
+    """The advanced activity: queue-fed MDA with analysis-driven events."""
+    import time
+    from queue import Queue
+    from useq import MDAEvent
+
+    core, sim = load_microscope("optogenetic", n_cells=10, seed=3,
+                                mode="realtime", warmup=False)
+    STOP = object()
+    q = Queue()
+    frames = []
+
+    def on_frame(img, event):
+        t = event.index.get("t", 0)
+        frames.append(t)
+        cells = detect_cells(img, min_area=20)
+        core.setSLMImage("SLM", steer_mask(cells))
+        if t + 1 >= 6:
+            q.put(STOP)
+        else:
+            q.put(MDAEvent(index={"t": t + 1},
+                           channel={"config": "DAPI", "group": "Channel"},
+                           min_start_time=(t + 1) * 0.15))
+
+    core.mda.events.frameReady.connect(on_frame)
+    core.run_mda(iter(q.get, STOP))
+    q.put(MDAEvent(index={"t": 0},
+                   channel={"config": "DAPI", "group": "Channel"}))
+    deadline = time.time() + 15
+    while core.mda.is_running() and time.time() < deadline:
+        time.sleep(0.05)
+    core.mda.events.frameReady.disconnect(on_frame)
+    from vmteach.bridge import GLOBAL_BRIDGE
+    if GLOBAL_BRIDGE is not None and GLOBAL_BRIDGE._engine is not None:
+        GLOBAL_BRIDGE._engine.stop()
+    assert not core.mda.is_running(), "MDA did not finish"
+    assert frames == list(range(6)), f"frames received: {frames}"
