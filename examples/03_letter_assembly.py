@@ -72,10 +72,11 @@ def build_letter_mask(cells, step_px=12, spot_r=11, occupied_r=28,
 # Run the feedback loop (~15 s for 500 cycles)
 sim.reset()
 for i in range(500):
-    core.setConfig("Channel", "DAPI")        # acquire the nuclei channel
+    core.setConfig("Channel", "DAPI")        # light off, acquire nuclei
     core.snapImage()
     cells = detect_cells(core.getImage())
     core.setSLMImage("SLM", build_letter_mask(cells))
+    core.setConfig("Channel", "CyanStim")    # light on: deliver the pattern
     advance(sim, seconds=1.0)
 
 core.setConfig("Channel", "phase-contrast")  # final image for display

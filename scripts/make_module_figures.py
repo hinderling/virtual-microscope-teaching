@@ -68,11 +68,12 @@ def run_loop(core, sim, decide, n=100):
     detections = []
     first_mask = None
     for i in range(n):
-        core.setConfig("Channel", "DAPI")
+        core.setConfig("Channel", "DAPI")      # light off, acquire
         core.snapImage()
         cells = detect_nuclei(core.getImage())
         mask = decide(cells)
-        core.setSLMImage("SLM", mask)
+        core.setSLMImage("SLM", mask)          # upload
+        core.setConfig("Channel", "CyanStim")  # light on: deliver
         if first_mask is None:
             first_mask = mask
         detections.append(cells)
@@ -167,6 +168,7 @@ def fig_letter():
         core.snapImage()
         cells = detect_nuclei(core.getImage())
         core.setSLMImage("SLM", build(cells))
+        core.setConfig("Channel", "CyanStim")
         if i in (0, 149):
             core.setConfig("Channel", "phase-contrast")
             core.snapImage()
@@ -223,12 +225,11 @@ def fig_pipeline():
             break
     assert cx0 is not None, "no 3-cell crop found — adjust box/seed"
 
-    # ── steering run to accumulate tracks ───────────────────────────────
+    # ── unstimulated time-lapse to accumulate tracks (pure analysis:
+    #    the cells move by their own motility, no light involved) ────────
     det = []
-    for _ in range(60):
-        cells = detect_nuclei(snap("DAPI"))
-        det.append(cells)
-        core.setSLMImage("SLM", steer_mask(cells))
+    for _ in range(100):
+        det.append(detect_nuclei(snap("DAPI")))
         advance(sim, 1.0)
 
     SC = 3  # upscale factor for legibility
@@ -280,40 +281,56 @@ def fig_pipeline():
         cv2.polylines(p5, [poly], False, (30, 110, 30), 3, cv2.LINE_AA)
     small_label(p5, "5. link into tracks")
 
-    # panel 6: the decision at t = 0
-    p6 = overlay(phase0, steer_mask(cells0))[cy0:cy0 + box, cx0:cx0 + box]
-    p6 = cv2.resize(p6, (box * SC, box * SC),
-                    interpolation=cv2.INTER_NEAREST)
-    small_label(p6, "6. decide: place light spots")
-
-    strip = np.hstack([p1, p2, p3, p4, p5, p6])
+    strip = np.hstack([p1, p2, p3, p4, p5])
     cv2.imwrite(f"{OUT}/pipeline_explained.png",
                 cv2.cvtColor(strip, cv2.COLOR_RGB2BGR))
 
 
-def fig_stim_channel():
-    """Planned mask overlay vs the actual projected light (CyanStim)."""
+def fig_stim_logic():
+    """The stimulation logic in three stages: segmentation + planned spots →
+    binary mask on the SLM/DMD (gray: white = light) → actual projected
+    light imaged in the CyanStim channel (cyan = light)."""
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
                                 warmup=False)
     core.setConfig("Channel", "DAPI")
     core.snapImage()
     cells = detect_nuclei(core.getImage())
     mask = steer_mask(cells)
-    core.setSLMImage("SLM", mask)
 
+    # 1. planned: segmentation centroids + spots over phase-contrast
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
-    p1 = label(overlay(core.getImage(), mask),
-               ["planned: mask overlaid on", "phase-contrast (software)"])
+    p1 = overlay(core.getImage(), mask)
+    for cx, cy in cells:
+        cv2.drawMarker(p1, (cx, cy), (0, 150, 150), cv2.MARKER_CROSS, 12, 2)
+    label(p1, ["1. segment + place spots", "(software overlay)"])
 
-    core.setConfig("Channel", "CyanStim")
+    def white_label(panel, lines):
+        y = 26
+        for line in lines:
+            (w, h), _ = cv2.getTextSize(line, cv2.FONT_HERSHEY_SIMPLEX,
+                                        0.55, 2)
+            sc = 0.55 * min(1.0, (panel.shape[1] - 24) / max(w, 1))
+            cv2.putText(panel, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX, sc,
+                        (235, 235, 235), 2, cv2.LINE_AA)
+            y += h + 12
+        return panel
+
+    # 2. the binary pattern as uploaded to the SLM/DMD (white = light on)
+    p2 = np.stack([mask] * 3, axis=-1)
+    white_label(p2, ["2. binary mask uploaded", "to the SLM/DMD (white = light)"])
+
+    # 3. the projected light, imaged in the CyanStim channel (cyan = light)
+    core.setSLMImage("SLM", mask)
+    core.setConfig("Channel", "CyanStim")   # light on: deliver + image
     core.snapImage()
-    stim = core.getImage()
-    p2 = np.stack([255 - stim] * 3, axis=-1)   # gray_r display convention
-    label(p2, ["actual: projected light imaged", "in the CyanStim channel"])
+    stim = core.getImage().astype(np.float32)
+    p3 = np.stack([np.zeros_like(stim), stim, stim],
+                  axis=-1).astype(np.uint8)          # cyan on black
+    white_label(p3, ["3. projected light imaged", "in the CyanStim channel"])
 
-    cv2.imwrite(f"{OUT}/act2_stim_channel_expected.png",
-                cv2.cvtColor(np.hstack([p1, p2]), cv2.COLOR_RGB2BGR))
+    cv2.imwrite(f"{OUT}/stimulation_logic.png",
+                cv2.cvtColor(np.hstack([p1, p2, p3]), cv2.COLOR_RGB2BGR))
 
 
 if __name__ == "__main__":
@@ -321,5 +338,5 @@ if __name__ == "__main__":
     fig_split()
     fig_letter()
     fig_pipeline()
-    fig_stim_channel()
+    fig_stim_logic()
     print("module figures written to", OUT)

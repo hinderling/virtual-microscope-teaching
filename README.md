@@ -69,8 +69,10 @@ for cycle in range(100):
         if m["m00"] > 100:
             cv2.circle(mask, (int(m["m10"]/m["m00"]), int(m["m01"]/m["m00"]) - 15), 11, 255, -1)
 
-    # ACTUATE — identical call on real hardware
+    # ACTUATE — identical calls on real hardware: upload the pattern,
+    # then engage the stimulation light path to deliver it
     core.setSLMImage("SLM", mask)
+    core.setConfig("Channel", "CyanStim")
 
     # let the sample respond (deterministic simulated time)
     advance(sim, seconds=1.0)
@@ -80,11 +82,14 @@ The cell population migrates upward, steered by your loop.
 
 ## Timing model (read this before designing experiments)
 
-1. **Stimulation is an impulse, applied when the mask is set** (and refreshed
-   on snaps while the mask is displayed). The impulse *sets* the cell
-   velocity toward the light, so each loop iteration delivers effectively one
-   stimulus — the feedback-loop frequency is the stimulation frequency
-   (mirrors pulsed optogenetic protocols).
+1. **Stimulation is gated on the light path**: `setSLMImage` only *uploads*
+   the pattern — the SLM modulates light that is not on yet. Switching to
+   the `CyanStim` channel engages the stimulation LED and delivers the
+   pattern (an impulse that *sets* cell velocity toward the light);
+   switching to an imaging channel turns it off. One delivery per loop
+   iteration — the feedback-loop frequency is the stimulation frequency,
+   as in pulsed optogenetic protocols. Snapping in `CyanStim` images the
+   projected light itself (mask–sample alignment check).
 2. **Stepped mode (default)** — simulated time advances only via
    `advance(sim, seconds=...)`. Same seed + same loop = identical result on
    every machine. This is the course default.

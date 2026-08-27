@@ -34,6 +34,7 @@ core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
 N_FRAMES = 30
 INTERVAL = 0.4          # seconds between frames
 DAPI = {"config": "DAPI", "group": "Channel"}
+STIM = {"config": "CyanStim", "group": "Channel"}
 
 
 # %%
@@ -64,22 +65,30 @@ class Controller:
 
     def _on_frame_ready(self, img: np.ndarray, event: MDAEvent) -> None:
         t = event.index.get("t", 0)
-        result = self._analyzer.run(img)
+        ch = event.channel.config if event.channel else None
 
-        # ACTUATE — same call as in the simple loop
-        self._core.setSLMImage("SLM", result["mask"])
-
-        # DECIDE what the microscope does next
-        if t + 1 >= self._n_frames:
-            self._queue.put(self.STOP)          # sentinel ends the MDA
+        if ch == "DAPI":
+            # analysis frame: segment, upload the pattern, then declare the
+            # stimulation as an EVENT. In the manual loop we had to
+            # choreograph the light path ourselves (setConfig on, off, on);
+            # here we just say "channel=CyanStim" and the engine switches
+            # the hardware — and records an image of the projected light.
+            result = self._analyzer.run(img)
+            self._core.setSLMImage("SLM", result["mask"])
+            self._queue.put(MDAEvent(index={"t": t}, channel=STIM))
+            print(f"frame {t + 1}/{self._n_frames}: "
+                  f"{result['n_cells']} cells", end="\r")
         else:
-            self._queue.put(MDAEvent(
-                index={"t": t + 1},
-                channel=DAPI,
-                min_start_time=(t + 1) * INTERVAL,   # pace by wall clock
-            ))
-        print(f"frame {t + 1}/{self._n_frames}: "
-              f"{result['n_cells']} cells", end="\r")
+            # stimulation frame delivered (and imaged). Queue the next
+            # analysis frame, or stop.
+            if t + 1 >= self._n_frames:
+                self._queue.put(self.STOP)      # sentinel ends the MDA
+            else:
+                self._queue.put(MDAEvent(
+                    index={"t": t + 1},
+                    channel=DAPI,
+                    min_start_time=(t + 1) * INTERVAL,  # pace by wall clock
+                ))
 
     def run(self):
         # a Queue is not iterable — iter(get, sentinel) makes it one
@@ -110,6 +119,9 @@ print(f"\nmean displacement after {N_FRAMES} frames: {dy.mean():+.1f} px "
 
 # %%
 # Why bother, when the for-loop worked fine?
+#  - the light-path choreography disappeared: stimulation is just an event
+#    with channel="CyanStim" — the engine switches LED + filter, delivers
+#    the pattern, and even logs an image of the projected light
 #  - useq MDAEvents carry the full acquisition vocabulary (z-stacks,
 #    positions, exposure, channels) in one declarative object
 #  - the engine handles hardware timing/synchronization; events are logged

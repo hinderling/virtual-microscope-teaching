@@ -78,11 +78,14 @@ plt.imshow(overlay(img, mask))
 plt.title("Stimulation mask (blue) — spots above each cell")
 
 # %%
-# ACTUATE: send the mask to the (virtual) SLM.
-# On a real system this is the identical call — the SLM projects the pattern
-# onto the sample. In the simulation, illuminated cells receive a protrusion
-# and a motility impulse toward the light — once per mask application.
+# ACTUATE — two steps, exactly like on real hardware:
+# 1. upload the pattern to the SLM (this alone does nothing — the SLM only
+#    *modulates* light that isn't on yet)
 core.setSLMImage("SLM", mask)
+# 2. engage the stimulation light path: switching to the CyanStim channel
+#    turns on the stimulation LED — NOW the pattern is delivered and the
+#    illuminated cells receive a protrusion + motility impulse
+core.setConfig("Channel", "CyanStim")
 
 # %%
 # SEE THE LIGHT: on a real microscope the stimulation light is physically
@@ -106,6 +109,10 @@ core.setConfig("Channel", "phase-contrast")
 
 # %%
 # CLOSE THE LOOP: acquire → analyze → decide → actuate → let time pass → repeat.
+# Note the light choreography each cycle: switching to phase-contrast for the
+# acquisition turns the stimulation light OFF; after uploading the new mask,
+# switching to CyanStim turns it back ON. Forget the switch and nothing
+# happens — a classic real-microscope debugging moment.
 # advance(sim, seconds=1.0) advances the simulation deterministically;
 # on real hardware this would simply be the interval between acquisitions.
 
@@ -114,11 +121,13 @@ history = []
 
 sim.reset()
 for i in range(n_cycles):
+    core.setConfig("Channel", "phase-contrast") # light off, imaging channel
     core.snapImage()
     img = core.getImage()                       # acquire
     cells = detect_cells(img)                   # analyze
     mask = build_steer_mask(cells)              # decide
-    core.setSLMImage("SLM", mask)               # actuate
+    core.setSLMImage("SLM", mask)               # upload pattern
+    core.setConfig("Channel", "CyanStim")       # light on: deliver
     advance(sim, seconds=1.0)                   # sample responds
     history.append(np.array([(cx, cy) for cx, cy, _ in cells]))
 
@@ -144,12 +153,14 @@ def build_split_mask(cells, offset_px=15, spot_radius=11, shape=(512, 512)):
 sim.reset()
 start = None
 for i in range(n_cycles):
+    core.setConfig("Channel", "phase-contrast")
     core.snapImage()
     img = core.getImage()
     cells = detect_cells(img)
     if start is None:
         start = {i: (cx, cy) for i, (cx, cy, _) in enumerate(cells)}
     core.setSLMImage("SLM", build_split_mask(cells))
+    core.setConfig("Channel", "CyanStim")
     advance(sim, seconds=1.0)
 
 plt.imshow(overlay(img, build_split_mask(cells)))

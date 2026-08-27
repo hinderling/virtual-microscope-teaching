@@ -73,10 +73,12 @@ def test_feedback_loop_steers_cells(scope):
         y_prev = sim.centers[:, 1].copy()
         total_dy = np.zeros(len(y_prev))
         for _ in range(n):
+            core.setConfig("Channel", "phase-contrast")   # light OFF, acquire
             core.snapImage()
             img = core.getImage()
             cells = detect_cells(img)
-            core.setSLMImage("SLM", steer_mask(cells))
+            core.setSLMImage("SLM", steer_mask(cells))    # upload pattern
+            core.setConfig("Channel", "CyanStim")         # light ON: deliver
             advance(sim, seconds=1.0)
             # wrap-aware displacement (periodic world boundaries)
             dy = sim.centers[:, 1] - y_prev
@@ -106,6 +108,30 @@ def test_reset_clears_leftover_slm_mask(scope):
     # protrude every cell — check velocities are not uniformly boosted
     assert not getattr(sim._cells[0], "is_stimulated", False)
     assert np.allclose(p0, sim.centers, atol=5.0)
+
+
+def test_stimulation_gated_on_light_path(scope):
+    """Uploading a mask alone must NOT stimulate; engaging the CyanStim
+    light path must; switching away must clear the stimulation."""
+    core, sim = scope
+    sim.reset()
+    core.setConfig("Channel", "phase-contrast")
+    mask = np.full((512, 512), 255, np.uint8)
+    core.setSLMImage("SLM", mask)
+    assert not any(c.is_stimulated for c in sim._cells), \
+        "mask upload alone must not stimulate"
+    core.setConfig("Channel", "CyanStim")
+    # only cells inside the illuminated field of view can receive light
+    off = sim.camera_offset
+    in_view = [c for c in sim._cells
+               if off[0] + 30 < c.center[0] < off[0] + 482
+               and off[1] + 30 < c.center[1] < off[1] + 482]
+    assert in_view and all(c.is_stimulated for c in in_view), \
+        "engaging the light path must deliver the pattern to in-view cells"
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    assert not any(c.is_stimulated for c in sim._cells), \
+        "light off must clear stimulation"
 
 
 def test_cyanstim_images_projected_light(scope):
@@ -171,15 +197,21 @@ def test_event_driven_mda_queue():
 
     def on_frame(img, event):
         t = event.index.get("t", 0)
-        frames.append(t)
-        cells = detect_cells(img, min_area=20)
-        core.setSLMImage("SLM", steer_mask(cells))
-        if t + 1 >= 6:
+        ch = event.channel.config if event.channel else None
+        frames.append((t, ch))
+        if ch == "DAPI":
+            cells = detect_cells(img, min_area=20)
+            core.setSLMImage("SLM", steer_mask(cells))
+            # stimulation = just another declared event (engine switches
+            # the light path for us)
+            q.put(MDAEvent(index={"t": t},
+                           channel={"config": "CyanStim", "group": "Channel"}))
+        elif t + 1 >= 3:
             q.put(STOP)
         else:
             q.put(MDAEvent(index={"t": t + 1},
                            channel={"config": "DAPI", "group": "Channel"},
-                           min_start_time=(t + 1) * 0.15))
+                           min_start_time=(t + 1) * 0.2))
 
     core.mda.events.frameReady.connect(on_frame)
     core.run_mda(iter(q.get, STOP))
@@ -193,4 +225,6 @@ def test_event_driven_mda_queue():
     if GLOBAL_BRIDGE is not None and GLOBAL_BRIDGE._engine is not None:
         GLOBAL_BRIDGE._engine.stop()
     assert not core.mda.is_running(), "MDA did not finish"
-    assert frames == list(range(6)), f"frames received: {frames}"
+    expected = [(0, "DAPI"), (0, "CyanStim"), (1, "DAPI"), (1, "CyanStim"),
+                (2, "DAPI"), (2, "CyanStim")]
+    assert frames == expected, f"frames received: {frames}"

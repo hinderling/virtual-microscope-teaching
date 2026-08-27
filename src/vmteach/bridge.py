@@ -60,18 +60,34 @@ class SimulationBridge:
     # ── state devices (LED / Filter Wheel / Objective) ──────────────────
 
     def update_state(self, dict_state: dict) -> None:
+        prev_led = self._sim.state_devices.get("LED", {}).get("label")
         self._sim.state_devices.update(dict_state)
+        new_led = self._sim.state_devices.get("LED", {}).get("label")
+        # Stimulation light switched ON: deliver the loaded SLM pattern
+        if new_led == "BLUE" and prev_led != "BLUE":
+            self._apply_mask(self._current_slm_mask)
 
     # ── SLM ─────────────────────────────────────────────────────────────
 
     def set_slm_mask(self, mask: np.ndarray) -> None:
-        """Called by the SLM device; applies stimulation immediately.
+        """Called by the SLM device: upload the pattern.
 
-        In realtime mode the engine steps the sim on a background thread,
-        so the stimulation update takes the engine lock (callers may be on
-        yet another thread, e.g. an MDA frameReady callback).
+        Delivery is gated on the light path — if the stimulation light is
+        already on the pattern acts immediately, otherwise it waits until
+        the channel is switched to "CyanStim" (see update_state).
         """
         self._current_slm_mask = mask
+        self._apply_mask(mask)
+
+    def _apply_mask(self, mask) -> None:
+        """Push the pattern into the sim (gated there on the light path).
+
+        In realtime mode the engine steps the sim on a background thread,
+        so the update takes the engine lock (callers may be on yet another
+        thread, e.g. an MDA frameReady callback).
+        """
+        if mask is None:
+            return
         if self._engine is not None:
             with self._engine.lock:
                 self._sim._handle_mask(mask)

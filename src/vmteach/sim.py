@@ -166,9 +166,19 @@ class OptoCellSim:
 
     # ── stimulation ─────────────────────────────────────────────────────
 
+    @property
+    def stim_light_on(self) -> bool:
+        """True while the stimulation light path is engaged (CyanStim)."""
+        return self.state_devices.get("LED", {}).get("label") == "BLUE"
+
     def _handle_mask(self, mask: np.ndarray | None) -> None:
-        """Apply optogenetic stimulation. Mask is in viewport coordinates."""
-        if mask is None or not mask.any():
+        """Apply optogenetic stimulation. Mask is in viewport coordinates.
+
+        Gated on the light path: the SLM only *modulates* light — the
+        pattern is delivered to the sample only while the stimulation
+        LED is on (Channel "CyanStim"), exactly like real hardware.
+        """
+        if mask is None or not mask.any() or not self.stim_light_on:
             for c in self._cells:
                 c.is_stimulated = False
             return
@@ -209,7 +219,7 @@ class OptoCellSim:
             # cells — enough to check mask–sample alignment, exactly as on
             # a real microscope.
             faint = self.renderer.render(self._cells, 0)
-            view = self._crop_view(faint).astype(np.float32) * 0.15
+            view = self._crop_view(faint).astype(np.float32) * 0.05
             if mask is not None and mask.shape == view.shape:
                 view += (mask > 0).astype(np.float32) * 200.0
             return self._optics[3].apply(
