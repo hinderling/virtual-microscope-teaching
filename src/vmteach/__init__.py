@@ -25,6 +25,8 @@ from vmteach.teach import (
     advance,
     overlay,
     letter_mask,
+    detect_nuclei,
+    link_tracks,
 )
 
 __all__ = [
@@ -32,6 +34,8 @@ __all__ = [
     "advance",
     "overlay",
     "letter_mask",
+    "detect_nuclei",
+    "link_tracks",
 ]
 
 __version__ = "0.1.0"

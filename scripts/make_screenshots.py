@@ -13,27 +13,24 @@ import cv2
 import numpy as np
 from qtpy.QtCore import QTimer
 
-from vmteach import load_microscope, advance
+from vmteach import advance, detect_nuclei, load_microscope
 from vmteach.gui import launch_gui, show_results
 
 OUT = "docs/images"
 WINDOW = (1500, 950)
 
 
-def detect(img):
+def segment(img):
+    """Label mask from the phase image (for the segmentation layer)."""
     _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cells, seg, lbl = [], np.zeros_like(img, np.int32), 1
+    seg, lbl = np.zeros_like(img, np.int32), 1
     for c in cts:
         if cv2.contourArea(c) < 100:
             continue
-        m = cv2.moments(c)
-        if m["m00"] == 0:
-            continue
-        cells.append((int(m["m10"] / m["m00"]), int(m["m01"] / m["m00"])))
         cv2.drawContours(seg, [c], -1, lbl, -1)
         lbl += 1
-    return cells, seg
+    return seg
 
 
 def shot_gui():
@@ -56,12 +53,14 @@ def shot_gui():
 def shot_results():
     import napari
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
-    core.setConfig("Channel", "phase-contrast")
     imgs, masks, cents, segs = [], [], [], []
     for _ in range(80):
+        core.setConfig("Channel", "DAPI")      # robust detection channel
+        core.snapImage()
+        cells = detect_nuclei(core.getImage())
+        core.setConfig("Channel", "phase-contrast")
         core.snapImage()
         img = core.getImage()
-        cells, seg = detect(img)
         mask = np.zeros((512, 512), np.uint8)
         for cx, cy in cells:
             dy = -15 if cx < 256 else 15
@@ -71,7 +70,7 @@ def shot_results():
         imgs.append(img.copy())
         masks.append(mask)
         cents.append(cells)
-        segs.append(seg)
+        segs.append(segment(img))
 
     viewer = show_results(imgs, masks=masks, centroids=cents,
                           segmentations=segs, name="split steering")

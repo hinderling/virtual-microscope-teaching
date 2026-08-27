@@ -7,7 +7,9 @@ Produces (deterministic — same seeds as the course activities):
     act2_split_expected.png      per-object decision: left up, right down
     exercise_letter_expected.png letter assembly result (DAPI routing)
 
-Runtime ~30 s.
+Detection uses the DAPI/nuclei reference detector and Hungarian track
+linking from the package, so the figures show what robust course code
+produces. Runtime ~30 s.
 """
 
 import sys
@@ -16,28 +18,17 @@ import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 
-from vmteach import load_microscope, advance, letter_mask, overlay
+from vmteach import (advance, detect_nuclei, letter_mask, link_tracks,
+                     load_microscope, overlay)
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "docs/images"
 
-
-def detect_cells(img, min_area=100):
-    _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    cts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    out = []
-    for c in cts:
-        if cv2.contourArea(c) < min_area:
-            continue
-        m = cv2.moments(c)
-        if m["m00"] == 0:
-            continue
-        out.append((int(m["m10"] / m["m00"]), int(m["m01"] / m["m00"])))
-    return out
+BLACK = (10, 10, 10)
 
 
 def label(panel, text):
     cv2.putText(panel, text, (12, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.75,
-                (255, 255, 255), 2, cv2.LINE_AA)
+                BLACK, 2, cv2.LINE_AA)
     return panel
 
 
@@ -48,56 +39,85 @@ def steer_mask(cells, dy=-15, r=11):
     return mask
 
 
+def draw_tracks(panel, rows, color_fn, thickness=2):
+    """Draw linked tracks as smooth polylines onto an RGB panel."""
+    for tid in np.unique(rows[:, 0]):
+        tr = rows[rows[:, 0] == tid]
+        if len(tr) < 5:
+            continue
+        pts = tr[np.argsort(tr[:, 1])][:, 2:]          # (y, x) time-ordered
+        poly = np.column_stack([pts[:, 1], pts[:, 0]]).astype(np.int32)
+        cv2.polylines(panel, [poly], False, color_fn(tr), thickness,
+                      cv2.LINE_AA)
+    return panel
+
+
+def run_loop(core, sim, decide, n=100):
+    """Standard loop: detect nuclei on DAPI, build mask, advance.
+
+    Returns (per-frame detections, final phase image, first mask).
+    """
+    sim.reset()
+    detections = []
+    first_mask = None
+    for i in range(n):
+        core.setConfig("Channel", "DAPI")
+        core.snapImage()
+        cells = detect_nuclei(core.getImage())
+        mask = decide(cells)
+        core.setSLMImage("SLM", mask)
+        if first_mask is None:
+            first_mask = mask
+        detections.append(cells)
+        advance(sim, 1.0)
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    return detections, core.getImage(), first_mask
+
+
 def fig_steering():
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
-    core.setConfig("Channel", "phase-contrast")
+    det, img_final, mask0 = run_loop(core, sim, steer_mask)
+
+    # panel 1: first frame with the mask
     sim.reset()
-    panels = []
-    tracks = []
-    for i in range(100):
-        core.snapImage()
-        img = core.getImage()
-        cells = detect_cells(img)
-        mask = steer_mask(cells)
-        core.setSLMImage("SLM", mask)
-        tracks.append(cells)
-        if i == 0:
-            panels.append(label(overlay(img, mask), "cycle 1 - mask (blue)"))
-        advance(sim, 1.0)
-    final = overlay(img, np.zeros_like(img))
-    # draw simple nearest-neighbour tails
-    for t in range(1, len(tracks)):
-        for (x1, y1) in tracks[t]:
-            best, bd = None, 40
-            for (x0, y0) in tracks[t - 1]:
-                d = np.hypot(x1 - x0, y1 - y0)
-                if d < bd:
-                    best, bd = (x0, y0), d
-            if best:
-                cv2.line(final, best, (x1, y1), (60, 120, 60), 1, cv2.LINE_AA)
-    panels.append(label(final, "cycle 100 - tracks (population moved up)"))
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    p1 = label(overlay(core.getImage(), mask0), "cycle 1 - mask (blue)")
+
+    # panel 2: final frame with linked tracks
+    p2 = overlay(img_final, np.zeros_like(img_final))
+    rows = link_tracks(det)
+    draw_tracks(p2, rows, lambda tr: (30, 110, 30))
+    label(p2, "cycle 100 - tracks (population moved up)")
+
     cv2.imwrite(f"{OUT}/act2_steering_expected.png",
-                cv2.cvtColor(np.hstack(panels), cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(np.hstack([p1, p2]), cv2.COLOR_RGB2BGR))
 
 
 def fig_split():
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
                                 warmup=False)
-    core.setConfig("Channel", "phase-contrast")
-    sim.reset()
-    for i in range(100):
-        core.snapImage()
-        img = core.getImage()
-        cells = detect_cells(img)
+
+    def decide(cells):
         mask = np.zeros((512, 512), np.uint8)
         for cx, cy in cells:
             dy = -15 if cx < 256 else 15
             cv2.circle(mask, (cx, int(np.clip(cy + dy, 0, 511))), 11, 255, -1)
-        core.setSLMImage("SLM", mask)
-        advance(sim, 1.0)
-    panel = overlay(img, mask)
-    cv2.line(panel, (256, 0), (256, 511), (255, 255, 255), 1, cv2.LINE_AA)
-    label(panel, "cycle 100 - left half up, right half down")
+        return mask
+
+    det, img_final, _ = run_loop(core, sim, decide)
+    panel = overlay(img_final, np.zeros_like(img_final))
+    rows = link_tracks(det)
+
+    def color(tr):
+        x0 = tr[np.argmin(tr[:, 1]), 3]        # starting x decides the group
+        return (30, 80, 200) if x0 < 256 else (200, 60, 30)
+
+    draw_tracks(panel, rows, color)
+    for y in range(0, 512, 14):                # dashed midline
+        cv2.line(panel, (256, y), (256, min(y + 7, 511)), BLACK, 1)
+    label(panel, "cycle 100 - left half up (blue), right half down (red)")
     cv2.imwrite(f"{OUT}/act2_split_expected.png",
                 cv2.cvtColor(panel, cv2.COLOR_RGB2BGR))
 
@@ -138,7 +158,7 @@ def fig_letter():
     for i in range(500):
         core.setConfig("Channel", "DAPI")
         core.snapImage()
-        cells = detect_cells(core.getImage(), min_area=20)
+        cells = detect_nuclei(core.getImage())
         core.setSLMImage("SLM", build(cells))
         if i in (0, 149):
             core.setConfig("Channel", "phase-contrast")
@@ -149,9 +169,8 @@ def fig_letter():
         advance(sim, 1.0)
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
-    img = core.getImage()
     on = sum(1 for cx, cy in cells if target[cy, cx] > 0)
-    p = overlay(img, target, color=(255, 120, 120), alpha=0.22)
+    p = overlay(core.getImage(), target, color=(255, 120, 120), alpha=0.22)
     panels.append(label(p, f"cycle 500 - {on}/{len(cells)} cells on target"))
     cv2.imwrite(f"{OUT}/exercise_letter_expected.png",
                 cv2.cvtColor(np.hstack(panels), cv2.COLOR_RGB2BGR))

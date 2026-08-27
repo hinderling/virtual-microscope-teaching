@@ -111,6 +111,81 @@ def advance(sim, seconds: float = 1.0, dt: float = 0.05) -> None:
         sim.step(dt)
 
 
+def detect_nuclei(img: np.ndarray, min_area: int = 20) -> list:
+    """Reference detector: nuclei centroids from a DAPI image.
+
+    Nuclei are bright, compact, and — unlike cell bodies — never touch
+    (cells collide before their nuclei can), so a plain Otsu threshold
+    stays reliable even in crowded fields. Use this as the robust
+    detection for feedback loops and tracking; write your own detector
+    in the activities to understand what it does.
+
+    Returns a list of ``(x, y)`` integer centroids.
+    """
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
+                                   cv2.CHAIN_APPROX_SIMPLE)
+    out = []
+    for c in contours:
+        if cv2.contourArea(c) < min_area:
+            continue
+        m = cv2.moments(c)
+        if m["m00"] == 0:
+            continue
+        out.append((int(m["m10"] / m["m00"]), int(m["m01"] / m["m00"])))
+    return out
+
+
+def link_tracks(detections, max_dist: float = 40.0,
+                memory: int = 2) -> np.ndarray:
+    """Link per-frame detections into tracks (Hungarian assignment).
+
+    Globally optimal frame-to-frame matching (scipy
+    ``linear_sum_assignment``) with distance gating: a detection farther
+    than ``max_dist`` from every track starts a new track instead of
+    producing a jumpy link. Tracks survive up to ``memory`` missed frames
+    (detector dropouts, cells briefly merging).
+
+    Args:
+        detections: sequence over frames; each frame a sequence of (x, y).
+        max_dist: gate — maximum linking distance in pixels per frame.
+        memory: frames a lost track is kept alive for re-linking.
+
+    Returns:
+        Array of rows ``(track_id, t, y, x)`` — the napari Tracks format.
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    BIG = 1e9
+    active: dict = {}          # tid -> (x, y, last_t)
+    rows = []
+    next_id = 0
+    for t, pts in enumerate(detections):
+        pts = np.asarray(pts, dtype=float).reshape(-1, 2)
+        tids = list(active.keys())
+        matched = set()
+        if tids and len(pts):
+            prev = np.array([active[i][:2] for i in tids])
+            cost = np.linalg.norm(prev[:, None, :] - pts[None, :, :], axis=2)
+            cost[cost > max_dist] = BIG
+            ri, ci = linear_sum_assignment(cost)
+            for r, c in zip(ri, ci):
+                if cost[r, c] >= BIG:
+                    continue
+                tid = tids[r]
+                active[tid] = (pts[c, 0], pts[c, 1], t)
+                rows.append((tid, t, pts[c, 1], pts[c, 0]))
+                matched.add(c)
+        for c, (x, y) in enumerate(pts):
+            if c in matched:
+                continue
+            active[next_id] = (x, y, t)
+            rows.append((next_id, t, y, x))
+            next_id += 1
+        active = {i: v for i, v in active.items() if t - v[2] <= memory}
+    return np.asarray(rows, dtype=float)
+
+
 def overlay(img: np.ndarray, mask: np.ndarray,
             color: tuple = (80, 140, 255), alpha: float = 0.4) -> np.ndarray:
     """Overlay a stimulation mask on a grayscale image as a colored wash.
