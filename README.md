@@ -102,8 +102,10 @@ The cell population migrates upward, steered by your loop.
 | `letter_mask(char)` | Binary letter target for the assembly exercise |
 
 `core` is a full `pymmcore-plus` core: stage (`setXYPosition`), objectives
-(`setState("Objective", ...)`), channels, exposure, SLM — explore with the
-GUI below.
+(`setState("Objective", ...)`), four channels (phase-contrast, DAPI,
+membrane, and **CyanStim** — which images the projected SLM light itself,
+for verifying mask–sample alignment like on a real system), exposure,
+SLM — explore with the GUI below.
 
 ## napari GUI
 

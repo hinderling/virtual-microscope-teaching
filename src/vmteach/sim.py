@@ -37,6 +37,7 @@ _MODE_MAP = {
     ("Electra1(402/454)", "CYAN"): 0,      # phase-contrast
     ("SCFP2(434/474)", "UV"): 1,           # DAPI
     ("mScarlet3(569/582)", "ORANGE"): 2,   # membrane
+    ("TagGFP2(483/506)", "BLUE"): 3,       # CyanStim: projected SLM light
 }
 
 
@@ -74,6 +75,8 @@ class OptoCellSim:
             0: Optics(seed + 300, psf_sigma=0.7, read_std=2.0, photon_k=0.30),
             1: Optics(seed + 301, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
             2: Optics(seed + 302, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
+            # stimulation-light channel: strong halo, bright, noisy
+            3: Optics(seed + 303, psf_sigma=1.6, read_std=3.0, photon_k=0.50),
         }
 
         self._seed = seed
@@ -199,9 +202,30 @@ class OptoCellSim:
         if mask is not None:
             self._handle_mask(mask)
 
-        world = self.renderer.render(self._cells, self.mode)
+        if self.mode == 3:
+            # CyanStim: image the SLM pattern projected onto the sample.
+            # What the camera sees is the stimulation light itself (bright,
+            # with a halo from the optics) plus a faint reflection of the
+            # cells — enough to check mask–sample alignment, exactly as on
+            # a real microscope.
+            faint = self.renderer.render(self._cells, 0)
+            view = self._crop_view(faint).astype(np.float32) * 0.15
+            if mask is not None and mask.shape == view.shape:
+                view += (mask > 0).astype(np.float32) * 200.0
+            return self._optics[3].apply(
+                np.clip(view, 0, 255).astype(np.uint8),
+                exposure=exposure, intensity=intensity,
+                defocus=self.focal_plane * 0.4)
 
-        # crop the objective's field of view around the camera center
+        world = self.renderer.render(self._cells, self.mode)
+        view = self._crop_view(world)
+
+        return self._optics[self.mode].apply(
+            view, exposure=exposure, intensity=intensity,
+            defocus=self.focal_plane * 0.4)
+
+    def _crop_view(self, world: np.ndarray) -> np.ndarray:
+        """Crop the objective's field of view and resize to the viewport."""
         fov = _FOV[self.current_objective]
         cx = self.camera_offset[0] + self.viewport_width / 2.0
         cy = self.camera_offset[1] + self.viewport_height / 2.0
@@ -214,10 +238,7 @@ class OptoCellSim:
             view = cv2.resize(view, (self.viewport_width,
                                      self.viewport_height),
                               interpolation=cv2.INTER_LINEAR)
-
-        return self._optics[self.mode].apply(
-            view, exposure=exposure, intensity=intensity,
-            defocus=self.focal_plane * 0.4)
+        return view
 
     # ── reset ───────────────────────────────────────────────────────────
 

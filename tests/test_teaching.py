@@ -46,7 +46,7 @@ def test_device_surface(scope):
     """The devices the course activities rely on must exist."""
     core, sim = scope
     assert set(core.getAvailableConfigs("Channel")) == {
-        "phase-contrast", "DAPI", "membrane"}
+        "phase-contrast", "DAPI", "membrane", "CyanStim"}
     assert core.getStateLabels("Objective") == ("10x", "20x", "40x", "100x")
     assert "SLM" in core.getLoadedDevices()
     core.setXYPosition(10.0, 20.0)  # stage moves without error
@@ -106,6 +106,21 @@ def test_reset_clears_leftover_slm_mask(scope):
     # protrude every cell — check velocities are not uniformly boosted
     assert not getattr(sim._cells[0], "is_stimulated", False)
     assert np.allclose(p0, sim.centers, atol=5.0)
+
+
+def test_cyanstim_images_projected_light(scope):
+    """The CyanStim channel shows the SLM pattern, bright inside the spots."""
+    core, sim = scope
+    sim.reset()
+    mask = np.zeros((512, 512), np.uint8)
+    cv2.circle(mask, (256, 200), 30, 255, -1)
+    core.setSLMImage("SLM", mask)
+    core.setConfig("Channel", "CyanStim")
+    core.snapImage()
+    img = core.getImage()
+    core.setConfig("Channel", "phase-contrast")
+    assert img[mask > 0].mean() > img[mask == 0].mean() + 100, \
+        "projected light not visible in CyanStim channel"
 
 
 def test_letter_mask():

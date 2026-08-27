@@ -189,8 +189,8 @@ def fig_pipeline():
     All panels show the experiment start (t=0); the tracks panel overlays
     where the cells went during the following 25 steering cycles.
     """
-    # seed 18 has a clean, isolated 3-cell neighbourhood for the crop
-    core, sim = load_microscope("optogenetic", n_cells=20, seed=18,
+    # seed 23 has a clean, isolated 3-cell neighbourhood for a tight crop
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=23,
                                 warmup=False)
 
     def snap(ch):
@@ -205,14 +205,14 @@ def fig_pipeline():
                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cells0 = detect_nuclei(dapi0)
 
-    # crop window with exactly 3 nuclei, clear of the label area (top 55 px)
-    box = 170
+    # crop window with exactly 3 nuclei, clear of the label area (top ~50 px)
+    box = 135
     cx0 = cy0 = None
-    for y in range(0, 512 - box, 8):
-        for x in range(0, 512 - box, 8):
+    for y in range(0, 512 - box, 5):
+        for x in range(0, 512 - box, 5):
             inside = [(cx, cy) for cx, cy in cells0
-                      if x + 30 < cx < x + box - 30
-                      and y + 60 < cy < y + box - 30]
+                      if x + 26 < cx < x + box - 26
+                      and y + 48 < cy < y + box - 26]
             n_total = sum(1 for cx, cy in cells0
                           if x - 20 < cx < x + box + 20
                           and y - 20 < cy < y + box + 20)
@@ -243,7 +243,9 @@ def fig_pipeline():
         return np.stack([g] * 3, axis=-1)
 
     def small_label(panel, text):
-        cv2.putText(panel, text, (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
+        (w, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.58, 2)
+        sc = 0.58 * min(1.0, (panel.shape[1] - 16) / max(w, 1))
+        cv2.putText(panel, text, (8, 26), cv2.FONT_HERSHEY_SIMPLEX, sc,
                     BLACK, 2, cv2.LINE_AA)
         return panel
 
@@ -284,9 +286,34 @@ def fig_pipeline():
                     interpolation=cv2.INTER_NEAREST)
     small_label(p6, "6. decide: place light spots")
 
-    grid = np.vstack([np.hstack([p1, p2, p3]), np.hstack([p4, p5, p6])])
+    strip = np.hstack([p1, p2, p3, p4, p5, p6])
     cv2.imwrite(f"{OUT}/pipeline_explained.png",
-                cv2.cvtColor(grid, cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(strip, cv2.COLOR_RGB2BGR))
+
+
+def fig_stim_channel():
+    """Planned mask overlay vs the actual projected light (CyanStim)."""
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
+                                warmup=False)
+    core.setConfig("Channel", "DAPI")
+    core.snapImage()
+    cells = detect_nuclei(core.getImage())
+    mask = steer_mask(cells)
+    core.setSLMImage("SLM", mask)
+
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    p1 = label(overlay(core.getImage(), mask),
+               ["planned: mask overlaid on", "phase-contrast (software)"])
+
+    core.setConfig("Channel", "CyanStim")
+    core.snapImage()
+    stim = core.getImage()
+    p2 = np.stack([255 - stim] * 3, axis=-1)   # gray_r display convention
+    label(p2, ["actual: projected light imaged", "in the CyanStim channel"])
+
+    cv2.imwrite(f"{OUT}/act2_stim_channel_expected.png",
+                cv2.cvtColor(np.hstack([p1, p2]), cv2.COLOR_RGB2BGR))
 
 
 if __name__ == "__main__":
@@ -294,4 +321,5 @@ if __name__ == "__main__":
     fig_split()
     fig_letter()
     fig_pipeline()
+    fig_stim_channel()
     print("module figures written to", OUT)

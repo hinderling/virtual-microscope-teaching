@@ -22,7 +22,7 @@ plugin used on real Micro-Manager systems:
 |---|---|---|
 | **Snap** (camera icon) | acquire one image into the `preview` layer | `core.snapImage()` |
 | **Live** (film icon) | continuous acquisition (~10 fps) — the simulated cells crawl in real time | `core.startContinuousSequenceAcquisition()` |
-| **Channel** dropdown | switch phase-contrast / DAPI / membrane | `core.setConfig("Channel", ...)` |
+| **Channel** dropdown | phase-contrast / DAPI / membrane / **CyanStim** (images the projected SLM light — use it to verify mask–sample alignment) | `core.setConfig("Channel", ...)` |
 | **Objectives** dropdown | 10x / 20x / 40x / 100x — field of view shrinks, pixel size updates | `core.setState("Objective", ...)` |
 | **Exposure** | exposure time in ms | `core.setExposure(...)` |
 | **MDA** | multi-dimensional acquisition editor (time-lapse, channels, positions) | `core.mda.run(...)` |

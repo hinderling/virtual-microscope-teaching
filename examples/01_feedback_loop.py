@@ -85,6 +85,26 @@ plt.title("Stimulation mask (blue) — spots above each cell")
 core.setSLMImage("SLM", mask)
 
 # %%
+# SEE THE LIGHT: on a real microscope the stimulation light is physically
+# projected onto the sample — and you can image it. Switch to the CyanStim
+# channel (stimulation LED + matching emission filter) and snap: the SLM
+# pattern appears, with optics halo and noise, over a faint reflection of
+# the cells. This is how you verify mask–sample alignment at the scope.
+core.setConfig("Channel", "CyanStim")
+core.snapImage()
+stim_img = core.getImage()
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+axes[0].imshow(overlay(img, mask))
+axes[0].set_title("planned (software overlay)")
+axes[1].imshow(stim_img, cmap="gray_r")
+axes[1].set_title("actual (CyanStim channel)")
+for ax in axes:
+    ax.axis("off")
+
+core.setConfig("Channel", "phase-contrast")
+
+# %%
 # CLOSE THE LOOP: acquire → analyze → decide → actuate → let time pass → repeat.
 # advance(sim, seconds=1.0) advances the simulation deterministically;
 # on real hardware this would simply be the interval between acquisitions.
