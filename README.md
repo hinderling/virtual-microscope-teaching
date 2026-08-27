@@ -1,0 +1,127 @@
+# virtual-microscope-teaching
+
+A **minimal virtual microscope for learning smart microscopy**: a simulated,
+light-responsive specimen behind the same device API
+([pymmcore-plus](https://github.com/pymmcore-plus/pymmcore-plus) /
+Micro-Manager) that controls real microscopes.
+
+> **The point:** the simulator models the *microscope–code interaction*, not
+> the biology. It lets you develop, debug, and teach image-processing
+> pipelines and microscope-control logic in minutes on any laptop — then swap
+> in a real microscope by changing only the configuration.
+
+![Swap virtual and real microscope](docs/images/placeholder_puzzle.svg)
+
+Code written against the virtual microscope runs unchanged on real hardware:
+`core.snapImage()`, `core.setConfig("Channel", ...)`, `core.setSLMImage(...)`
+are the identical calls in both worlds, because both implement the same
+Micro-Manager core API.
+
+This package accompanies the NEUBIAS
+[training-resources](https://neubias.github.io/training-resources/) module on
+**feedback photomanipulation** and is a frozen teaching subset of the full
+[virtual-microscope](https://github.com/hinderling/virtual-microscope)
+research simulator.
+
+## Install
+
+```bash
+pip install virtual-microscope-teaching
+```
+
+With the napari GUI (interactive microscope control, results exploration):
+
+```bash
+pip install "virtual-microscope-teaching[gui]"
+```
+
+Requires Python ≥ 3.10. No hardware, no Micro-Manager device adapters, no
+C++ — everything is pure Python.
+
+> First load compiles the simulation physics (numba) — expect a one-time
+> ~10–20 s "Preparing virtual microscope" message. Subsequent operations are
+> fast.
+
+## Quick start: a complete feedback experiment
+
+```python
+import cv2, numpy as np
+from vmteach import load_microscope, advance
+
+core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
+
+for cycle in range(100):
+    # ACQUIRE — identical call on real hardware
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    img = core.getImage()
+
+    # ANALYZE — segment cells (any method works; here Otsu + contours)
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    # DECIDE — place a light spot above each cell (cells move toward light)
+    mask = np.zeros_like(img)
+    for c in contours:
+        m = cv2.moments(c)
+        if m["m00"] > 100:
+            cv2.circle(mask, (int(m["m10"]/m["m00"]), int(m["m01"]/m["m00"]) - 15), 11, 255, -1)
+
+    # ACTUATE — identical call on real hardware
+    core.setSLMImage("SLM", mask)
+
+    # let the sample respond (deterministic simulated time)
+    advance(sim, seconds=1.0)
+```
+
+The cell population migrates upward, steered by your loop.
+
+## Timing model (read this before designing experiments)
+
+1. **Stimulation is applied once per `core.setSLMImage()` call** — an impulse
+   at mask-set time. Loop frequency *is* stimulation frequency (mirrors
+   pulsed optogenetic protocols).
+2. **Stepped mode (default)** — simulated time advances only via
+   `advance(sim, seconds=...)`. Same seed + same loop = identical result on
+   every machine. This is the course default.
+3. **Real-time mode** — `load_microscope(..., mode="realtime")`: the sample
+   evolves in wall-clock time *while your code runs*, like on a real
+   microscope. Your analysis latency becomes part of the experiment.
+
+## API
+
+| Function | Purpose |
+|---|---|
+| `load_microscope(backend, n_cells, seed, mode)` | Create the microscope → `(core, sim)` |
+| `advance(sim, seconds)` | Advance simulated time (stepped mode) |
+| `overlay(img, mask)` | RGB visualization of a stimulation mask on an image |
+| `letter_mask(char)` | Binary letter target for the assembly exercise |
+
+`core` is a full `pymmcore-plus` core: stage (`setXYPosition`), objectives
+(`setState("Objective", ...)`), channels, exposure, SLM — explore with the
+GUI below.
+
+## napari GUI
+
+```python
+from vmteach.gui import launch_gui
+core, sim = load_microscope("optogenetic")
+viewer = launch_gui(core)   # napari + micro-manager widgets on the virtual scope
+```
+
+Everything you click in the GUI issues the same core API calls your scripts
+make — the GUI and the script are two faces of one microscope.
+
+## Provenance
+
+Teaching subset extracted from
+[hinderling/virtual-microscope](https://github.com/hinderling/virtual-microscope)
+at commit `25ddf57` (branch `virtual-env`), package renamed
+`virtual_microscope` → `vmteach`. The full simulator has 35 specimen
+backends; this package ships only the `optogenetic` backend and its runtime
+dependencies.
+
+## License
+
+MIT — see [LICENSE](LICENSE). If you use this in teaching or research,
+please cite the FARO paper (see [CITATION.cff](CITATION.cff)).

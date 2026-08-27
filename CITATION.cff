@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+title: virtual-microscope-teaching
+message: "If you use this software in teaching or research, please cite it and the accompanying paper below."
+type: software
+authors:
+  - family-names: Hinderling
+    given-names: Lucien
+    orcid: "https://orcid.org/0000-0002-3956-9363"
+repository-code: "https://github.com/hinderling/virtual-microscope-teaching"
+license: MIT
+preferred-citation:
+  type: article
+  title: "Real-time feedback control microscopy for automation of optogenetic targeting"
+  authors:
+    - family-names: Hinderling
+      given-names: Lucien
+    - family-names: Pertz
+      given-names: Olivier
