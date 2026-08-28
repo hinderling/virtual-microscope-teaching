@@ -226,14 +226,18 @@ class OptogeneticCell(CellBase):
             self.is_stimulated = False
             return
 
-        # Convert vertex world positions to viewport (camera-relative) coords
+        # Convert vertex world positions to viewport (camera-relative)
+        # coords. The world is periodic and the camera crop wraps around
+        # its boundary, so the delta must wrap too: viewport pixel p shows
+        # world x = (x0 + p) mod W, hence p = (x - x0) mod W. Without the
+        # wrap, cells visible across the world seam could never be
+        # stimulated.
         vertices = self.vertices_positions
-        vx = vertices[:, 0] - camera_offset[0]
-        vy = vertices[:, 1] - camera_offset[1]
+        vx = (vertices[:, 0] - camera_offset[0]) % self.width
+        vy = (vertices[:, 1] - camera_offset[1]) % self.height
 
         # Check which vertices fall within the mask bounds
-        inside = ((vx >= 0) & (vx < mask.shape[1]) &
-                  (vy >= 0) & (vy < mask.shape[0]))
+        inside = (vx < mask.shape[1]) & (vy < mask.shape[0])
 
         if not inside.any():
             self.is_stimulated = False

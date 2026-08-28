@@ -228,3 +228,23 @@ def test_event_driven_mda_queue():
     expected = [(0, "DAPI"), (0, "CyanStim"), (1, "DAPI"), (1, "CyanStim"),
                 (2, "DAPI"), (2, "CyanStim")]
     assert frames == expected, f"frames received: {frames}"
+
+
+def test_stimulation_wraps_across_world_seam():
+    """A cell visible across the periodic world boundary (wrapped FOV crop)
+    must be stimulable: stimulate() wraps the world-to-viewport delta."""
+    from vmteach.cells import OptogeneticCell
+
+    cell = OptogeneticCell(600, 600, 20.0, seed=1)
+    cell.center = np.array([5.0, 300.0])   # just across the seam
+    mask = np.full((512, 512), 255, np.uint8)
+    # camera at x0=500: viewport shows world x in [500,600) U [0,412) via
+    # wrap; world x=5 appears at viewport x=(5-500)%600=105
+    cell.stimulate(mask, camera_offset=(500.0, 44.0))
+    assert cell.is_stimulated, "wrapped-FOV cell was not stimulated"
+
+    # and a cell genuinely outside the wrapped viewport stays unstimulated
+    cell2 = OptogeneticCell(600, 600, 20.0, seed=2)
+    cell2.center = np.array([450.0, 300.0])  # world x=450 -> (450-500)%600=550 >= 512
+    cell2.stimulate(mask, camera_offset=(500.0, 44.0))
+    assert not cell2.is_stimulated, "out-of-view cell was stimulated"

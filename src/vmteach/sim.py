@@ -177,6 +177,10 @@ class OptoCellSim:
         Gated on the light path: the SLM only *modulates* light, so the
         pattern is delivered to the sample only while the stimulation
         LED is on (Channel "CyanStim"), exactly like real hardware.
+
+        Delivery is an impulse at the delivery events (light-on transition
+        and snaps while lit); time advancing with the light engaged does
+        not stimulate again. This models pulsed stimulation protocols.
         """
         if mask is None or not mask.any() or not self.stim_light_on:
             for c in self._cells:
