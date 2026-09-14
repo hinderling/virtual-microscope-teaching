@@ -99,12 +99,21 @@ def _make_core_class():
         The C++ core matches pixel-size configs (``ConfigPixelSize`` in the
         .cfg) only against its own devices, so with a pure-Python objective
         ``getCurrentPixelSizeConfig()`` is always empty. Resolve it here so
-        ``core.getPixelSizeUm()`` reports the objective's pixel size (times
-        the camera binning), as it does on a real system.
+        ``core.getPixelSizeUm()`` and ``core.getPixelSizeAffine()`` report
+        the objective's pixel size (times the camera binning), as they do on
+        a real system.
         """
 
         def getCurrentPixelSizeConfig(self, cached: bool = False) -> str:
-            get = self.getPropertyFromCache if cached else self.getProperty
+            # Python devices are always read live: the C++ property cache is
+            # only refreshed by getProperty, not by setProperty/setStateLabel
+            # on a Python device, so a cached read after an objective change
+            # resolves the previous preset (and MDA metadata reads cached).
+            def get(dev, prop):
+                if cached and dev not in self._pydevices:
+                    return self.getPropertyFromCache(dev, prop)
+                return self.getProperty(dev, prop)
+
             for res in self.getAvailablePixelSizeConfigs():
                 data = self.getPixelSizeConfigData(res)
                 try:
@@ -124,7 +133,27 @@ def _make_core_class():
                 binning = float(self.getProperty(self.getCameraDevice(), "Binning"))
             except Exception:
                 pass
-            return self.getPixelSizeUmByID(res) * binning * self.getMagnificationFactor()
+            return self.getPixelSizeUmByID(res) * binning / self.getMagnificationFactor()
+
+        def getPixelSizeAffine(self, cached: bool = False) -> tuple:
+            """Pixel-size affine of the current preset, scaled by binning.
+
+            ``UniMMCore.getPixelSizeAffine`` asks the C++ core for the affine
+            at binning 1, but the C++ core never matched the preset (it only
+            sees Python devices through us) and aborts the interpreter on
+            Windows instead of returning it. Every MDA hits this through the
+            summary metadata, so resolve it here like ``getPixelSizeUm``.
+            """
+            res = self.getCurrentPixelSizeConfig(cached)
+            if not res:
+                return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            binning = 1.0
+            try:
+                binning = float(self.getProperty(self.getCameraDevice(), "Binning"))
+            except Exception:
+                pass
+            factor = binning / self.getMagnificationFactor()
+            return tuple(v * factor for v in self.getPixelSizeAffineByID(res))
 
     return VirtualMicroscopeCore
 

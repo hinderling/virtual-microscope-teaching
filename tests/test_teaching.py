@@ -424,3 +424,34 @@ def test_property_change_listener_may_call_setconfig(scope):
     core.events.propertyChanged.disconnect(snap_back)
     assert finished, "setProperty deadlocked while a listener called setConfig"
     core.setConfig("Channel", "phase-contrast")
+
+
+def test_pixel_size_affine_follows_objective_and_binning(scope):
+    """getPixelSizeAffine is resolved in Python: the C++ core never matched
+    the preset and aborts on Windows if asked (issue #1). Every MDA reads it
+    through pymmcore-plus's summary metadata."""
+    core, _ = scope
+    cam = core.getCameraDevice()
+    for obj, px in (("4x", 2.5), ("10x", 1.0), ("60x", 0.1667)):
+        core.setStateLabel("Objective", obj)
+        for b in (1, 2):
+            core.setProperty(cam, "Binning", b)
+            assert core.getPixelSizeAffine() == pytest.approx((px * b, 0, 0, 0, px * b, 0), rel=1e-3)
+            assert core.getPixelSizeUm() == pytest.approx(px * b, rel=1e-3)
+    core.setProperty(cam, "Binning", 1)
+    core.setStateLabel("Objective", "10x")
+
+
+def test_mda_summary_metadata_builds(scope):
+    """The metadata pymmcore-plus attaches to every MDA sequence, which is
+    where getPixelSizeAffine used to abort the process."""
+    from pymmcore_plus.metadata.functions import summary_metadata
+
+    core, _ = scope
+    core.setStateLabel("Objective", "60x")   # cached reads must not see the old preset
+    core.setStateLabel("Objective", "10x")
+    core.setProperty(core.getCameraDevice(), "Binning", 1)
+    meta = summary_metadata(core)
+    info = meta["image_infos"][0]
+    assert info["pixel_size_um"] == pytest.approx(1.0)
+    assert info["pixel_size_config_name"] == "Res10x"
