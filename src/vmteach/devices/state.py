@@ -1,8 +1,10 @@
 from pymmcore_plus.experimental.unicore import StateDevice
+
 import vmteach.bridge as bridge_module
+from vmteach.devices._base import ReentrantLockMixin
 
 
-class GenericStateDevice(StateDevice):
+class GenericStateDevice(ReentrantLockMixin, StateDevice):
     """A state device with caller-defined labels and name.
 
     All state devices in the simulation use this base. The three
@@ -22,11 +24,11 @@ class GenericStateDevice(StateDevice):
             self.update_microscope_simulation()
 
     def initialize(self) -> None:
-        """Push current state to bridge after SimServer has set GLOBAL_BRIDGE.
+        """Push current state to bridge once the bridge exists.
 
         initializeAllDevices() runs all devices in parallel threads, so we
-        wait for the bridge_ready event (set by SimServer.initialize()) before
-        pushing state. Timeout of 5s prevents hangs if SimServer fails.
+        wait for the bridge_ready event before pushing state. Timeout of
+        5s prevents hangs if the bridge is never created.
         """
         bridge_module.bridge_ready.wait(timeout=5.0)
         self.update_microscope_simulation()
@@ -83,12 +85,13 @@ class LEDDevice(GenericStateDevice):
 
 
 class ObjectiveDevice(GenericStateDevice):
-    """Microscope objective turret (4 magnifications)."""
+    """Objective turret (5 magnifications; pixel sizes live in the .cfg)."""
 
     def __init__(self) -> None:
         super().__init__("Objective", {
-            0: "10x",
-            1: "20x",
-            2: "40x",
-            3: "100x",
+            0: "4x",
+            1: "10x",
+            2: "20x",
+            3: "40x",
+            4: "60x",
         })

@@ -80,6 +80,9 @@ for i in range(500):
     core.setConfig("Channel", "CyanStim")    # light on: deliver the pattern
     advance(sim, seconds=1.0)
 
+core.setConfig("Channel", "membrane")        # cell outlines for the metric
+core.snapImage()
+outlines = core.getImage()
 core.setConfig("Channel", "phase-contrast")  # final image for display
 core.snapImage()
 img = core.getImage()
@@ -87,7 +90,9 @@ img = core.getImage()
 # %%
 # Metrics: cells-on-target is the fair one, because pixel coverage cannot reach
 # 100% because cells keep a collision distance (like real cells).
-_, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+_, binary = cv2.threshold(outlines, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+cv2.drawContours(binary, contours, -1, 255, -1)   # fill the outlines
 coverage = (binary & target).sum() / target.sum()
 on_target = sum(1 for cx, cy in cells if target[cy, cx] > 0) / len(cells)
 print(f"target coverage {coverage:.0%}, cells on target {on_target:.0%}")

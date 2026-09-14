@@ -1,8 +1,9 @@
 from pymmcore_plus.experimental.unicore import StageDevice
+from vmteach.devices._base import ReentrantLockMixin
 from pymmcore_plus import FocusDirection
 import vmteach.bridge as bridge_module
 
-class SimZStageDevice(StageDevice):
+class SimZStageDevice(ReentrantLockMixin, StageDevice):
 
     def __init__(self):
         super().__init__()

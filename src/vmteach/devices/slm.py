@@ -1,7 +1,8 @@
-"""
-pymmcore_slm_sim.py
+"""Virtual SLM / DMD: a 512 x 512 binary light pattern projector.
 
-A virtual SLM device for pymmcore that simulates a spatial light modulator (SLM).
+The pattern is mapped 1:1 onto the camera sensor (a perfectly calibrated
+projector), at every objective. See ``OptoCellSim.slm_affine`` for the
+calibration hook used by the DMD calibration exercise.
 """
 import time
 import numpy as np
@@ -10,8 +11,9 @@ from typing import ClassVar
 from pymmcore_plus.experimental.unicore import UniMMCore
 from pymmcore_plus.experimental.unicore.devices._slm import SLMDevice
 import vmteach.bridge as bridge_module
+from vmteach.devices._base import ReentrantLockMixin
 
-class SimSLMDevice(SLMDevice):
+class SimSLMDevice(ReentrantLockMixin, SLMDevice):
     """Virtual SLM device for simulation."""
 
     WIDTH: ClassVar[int] = 512
@@ -114,13 +116,12 @@ class SimSLMDevice(SLMDevice):
         return self._exposure
 
     def set_pixels_to(self, intensity: int) -> None:
-        self._image.fill(intensity)
-        self._displayed = True
+        """Fill the whole SLM with one gray level and display it."""
+        self.set_image(np.full(self.shape(), int(intensity), np.uint8))
 
     def set_pixels_to_rgb(self, red: int, green: int, blue: int) -> None:
         avg = int((int(red) + int(green) + int(blue)) / 3)
-        self._image.fill(avg)
-        self._displayed = True
+        self.set_pixels_to(avg)
 
     def get_number_of_components(self) -> int:
         return 1  # grayscale

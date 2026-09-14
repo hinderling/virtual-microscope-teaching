@@ -1,42 +1,68 @@
+"""Virtual camera: a fixed 512 x 512 sensor in front of the simulation.
+
+The objective never changes the image size, only the pixel size (declared
+as pixel-size configs in optogenetic.cfg). Binning is a preset (1x1, 2x2,
+4x4): the frame shrinks to 512/b and each output pixel sums b^2 sensor
+pixels, so the image gets b^2 brighter (lower the exposure, as you would
+on a real camera).
+"""
+
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from typing import Callable, Optional
 
-from pymmcore_plus import PropertyType
 import numpy as np
 from numpy.typing import DTypeLike
-from pymmcore_plus.experimental.unicore import CameraDevice, UniMMCore
-from pymmcore_plus.experimental.unicore import pymm_property
+from pymmcore_plus import PropertyType
+from pymmcore_plus.experimental.unicore import CameraDevice, pymm_property
+
 import vmteach.bridge as bridge_module
+from vmteach.devices._base import ReentrantLockMixin
 
-class SimCameraDevice(CameraDevice):
-    """
-    pymmcore_camera_sim.py
+class _IntPresets(tuple):
+    """Allowed values that accept ``2`` and ``"2"`` alike.
 
-    A virtual camera device for pymmcore that generates images using the microscope_sim.py simulation.
+    unicore validates ``value in allowed_values`` without coercion, but
+    config files and the GUI send strings while scripts send ints (real
+    MMCore stringifies everything, so both must work).
     """
+
+    def __contains__(self, value) -> bool:
+        try:
+            return tuple.__contains__(self, int(value))
+        except (TypeError, ValueError):
+            return False
+
+
+BINNING_PRESETS = _IntPresets((1, 2, 4))
+
+
+class SimCameraDevice(ReentrantLockMixin, CameraDevice):
+    """pymmcore camera device rendering frames from the simulation."""
+
     _exposure: float = 50.0
     _brightness: float = 1.0
     _gain: float = 1.0
-    _binning: int = 2 # default 2x2
-    _mask: Optional[np.ndarray] = None
-    _pixel_mask: Optional[np.ndarray] = None
-    _led_channel: str = None
-    _filter_wheel_channel: str = None
-    # Region of interest as (x, y, width, height); None == full sensor.
+    _binning: int = 1
+    # Region of interest as (x, y, width, height) in *output* pixels;
+    # None == full frame.
     _roi: Optional[tuple[int, int, int, int]] = None
 
-    def __init__(self) -> None:
+    # Minimum interval between frames (seconds) to avoid starving the Qt main
+    # thread.  The rendering holds the GIL, so without a gap the UI freezes.
+    _MIN_FRAME_INTERVAL: float = 0.033  # ~30 FPS max
 
+    def __init__(self) -> None:
         super().__init__()
-        self.bridge = bridge_module.GLOBAL_BRIDGE
-        self._mask = None
-        # change limits of binning
-        self.set_property_limits("Binning", (0, 20))
+        # Binning is a choice of presets, not a slider
+        self.set_property_limits("Binning", None)
+        self.set_property_allowed_values("Binning", BINNING_PRESETS)
 
     def _get_bridge(self):
         """Always use the current global bridge (may be swapped at runtime)."""
         return bridge_module.GLOBAL_BRIDGE
+
+    # ── exposure ────────────────────────────────────────────────────────
 
     def get_exposure(self) -> float:
         return self._exposure
@@ -45,116 +71,75 @@ class SimCameraDevice(CameraDevice):
         self._exposure = exposure
         self.core.events.exposureChanged.emit(self.get_label(), exposure)
 
-    def _sensor_hw(self) -> tuple[int, int]:
-        """Full (height, width) of the simulated sensor, ignoring any ROI."""
+    # ── geometry ────────────────────────────────────────────────────────
+
+    def _sensor_size(self) -> int:
         bridge = self._get_bridge()
         if bridge is None:
-            return 512, 512  # Default fallback dimensions
-        sim = bridge._sim
-        return sim.viewport_height, sim.viewport_width
+            from vmteach.sim import SENSOR_SIZE
+            return SENSOR_SIZE
+        return bridge._sim.sensor_size
 
-    def _is_rgb(self) -> bool:
-        bridge = self._get_bridge()
-        return bool(bridge is not None and getattr(bridge._sim, 'rgb_mode', False))
+    def _frame_hw(self) -> tuple[int, int]:
+        """Full (height, width) of the output frame at the current binning."""
+        n = self._sensor_size() // self._binning
+        return n, n
 
     def shape(self) -> tuple[int, ...]:
-        """Frame shape, ROI-cropped (h, w[, 3]) when an ROI is active."""
+        """Frame shape, ROI-cropped (h, w) when an ROI is active."""
         if self._roi is not None:
             _, _, w, h = self._roi
-        else:
-            h, w = self._sensor_hw()
-        return (h, w, 3) if self._is_rgb() else (h, w)
+            return (h, w)
+        return self._frame_hw()
 
     def dtype(self) -> DTypeLike:
-        bridge = self._get_bridge()
-        if bridge is not None:
-            return getattr(bridge._sim, 'pixel_dtype', np.uint8)
         return np.uint8
 
-    def set_mask(self, mask: Optional[np.ndarray]) -> None:
-        self._mask = mask
-
-    def set_pixel_mask(self, mask: Optional[np.ndarray]) -> None:
-        """Arm a one-shot pixel-acquisition mask for the *next* snap.
-
-        Consumed on the next ``start_sequence()`` snap and cleared, so
-        subsequent snaps return to full coverage unless re-armed;
-        mirrors the Reset device's edge-trigger semantics. Pass
-        ``None`` to disarm before triggering.
-
-        ``mask`` must be a 2D boolean (or 0/1) array matching the
-        camera's viewport shape; ``True``/``1`` selects pixels, the
-        rest are zeroed in the output and excluded from dose
-        accounting (a 25%-coverage mask charges 25% of the bleach
-        dose). Maps to Ye 2025 (uncertainty-driven adaptive
-        scanning), Jackson 2009, Kandel 2023 sparse-scanning archetypes.
-        """
-        self._pixel_mask = mask
-
-    # Minimum interval between frames (seconds) to avoid starving the Qt main
-    # thread.  The rendering holds the GIL, so without a gap the UI freezes.
-    _MIN_FRAME_INTERVAL: float = 0.033  # ~30 FPS max
+    # ── acquisition ─────────────────────────────────────────────────────
 
     def start_sequence(
         self,
         n: int | None,
         get_buffer: Callable[[Sequence[int], DTypeLike], np.ndarray],
     ) -> Iterator[Mapping]:
-
         count = 0
         while n is None or count < n:
             t0 = time.perf_counter()
             bridge = self._get_bridge()
-            self._mask = bridge.get_slm_mask() # type: ignore
-            # One-shot pixel_mask: consumed on this snap, then cleared
-            # so subsequent snaps return to full coverage unless the
-            # agent re-arms the mask. Mirrors the Reset device pattern.
-            pm = self._pixel_mask
-            self._pixel_mask = None
-            surf = bridge.snap(brightness=self._brightness, exposure=self._exposure,
-                               gain=self._gain, pixel_mask=pm)  # type: ignore
+            frame = bridge.snap(brightness=self._brightness,
+                                exposure=self._exposure, gain=self._gain,
+                                binning=self._binning)  # type: ignore
 
-            # Digital ROI: crop the rendered full-frame to the requested
-            # region. The sim always renders its full viewport; the ROI is
-            # purely a readout crop, so this works for every backend.
+            # Digital ROI: the sim always renders the full frame; the ROI
+            # is purely a readout crop.
             if self._roi is not None:
                 x, y, w, h = self._roi
-                surf = surf[y:y + h, x:x + w]
+                frame = frame[y:y + h, x:x + w]
 
-            buf = get_buffer(surf.shape, self.dtype())
-            buf[:] = surf
-
-            yield {
-                "data": buf,
-                "timestamp": time.time()
-                }
+            buf = get_buffer(frame.shape, self.dtype())
+            buf[:] = frame
+            yield {"data": buf, "timestamp": time.time()}
             count += 1
 
             # Throttle: ensure minimum interval so the main thread gets GIL time
-            elapsed = time.perf_counter() - t0
-            remaining = self._MIN_FRAME_INTERVAL - elapsed
+            remaining = self._MIN_FRAME_INTERVAL - (time.perf_counter() - t0)
             if remaining > 0:
                 time.sleep(remaining)
 
-    # define property brightness
+    # ── properties ──────────────────────────────────────────────────────
+
     @pymm_property(
-        limits=(0.0,100.0),
+        limits=(0.0, 100.0),
         sequence_max_length=100,
         name="brightness",
-        property_type=PropertyType.Float
+        property_type=PropertyType.Float,
     )
     def brightness(self) -> float:
-        """
-        Get the brightness of the virtual camera.
-        """
+        """Illumination brightness multiplier of the virtual light source."""
         return self._brightness
 
-    # setter methods
     @brightness.setter
     def brightness(self, value: float) -> None:
-        """
-        Send the values to the virtual hardware to update the brightness.
-        """
         self._brightness = value
 
     @brightness.sequence_loader
@@ -172,12 +157,10 @@ class SimCameraDevice(CameraDevice):
         property_type=PropertyType.Float,
     )
     def gain(self) -> float:
-        """Analog gain multiplier (1.0 = no amplification, 32.0 = max).
+        """Analog gain multiplier (1.0 = none, 32.0 = max).
 
-        Higher gain amplifies the signal but also amplifies noise,
-        reducing the effective dynamic range. Use higher gain for dim
-        samples when increasing exposure is not possible (e.g. fast
-        timelapse, motion blur concerns, photobleaching-sensitive).
+        Higher gain amplifies the signal but also the noise. Use it for
+        dim samples when increasing exposure is not an option.
         """
         return self._gain
 
@@ -186,41 +169,41 @@ class SimCameraDevice(CameraDevice):
         self._gain = max(1.0, min(32.0, value))
 
     def get_binning(self) -> int:
-        """
-        Return the current binning of the virtual camera.
-        """
+        """Current binning factor (1, 2 or 4)."""
         return self._binning
 
     def set_binning(self, binning: int) -> None:
-        """
-        Set the current binning of the virtual camera.
-        """
-        self._binning = binning
+        """Set binning; the frame shrinks to sensor/b and the ROI resets."""
+        b = int(binning)
+        if b not in BINNING_PRESETS:
+            raise ValueError(
+                f"Binning {binning!r} not supported; choose one of "
+                f"{BINNING_PRESETS}")
+        if b != self._binning:
+            self._binning = b
+            self._roi = None
 
-    # ROI support ------------------------------------------------------
+    # ── ROI ─────────────────────────────────────────────────────────────
     #
-    # The sim always renders its full viewport; ROI is applied as a
-    # digital crop of the finished frame in start_sequence(). This gives
-    # every backend real ROI support for free. Implementing set_roi also
-    # fixes a teardown bug: pymmcore-plus's MDAEngine snapshots the ROI at
-    # sequence start and restores it via setROI() in teardown_sequence().
-    # The unicore CameraDevice base raises NotImplementedError from
-    # set_roi, and that exception propagates out of MDARunner._finish_run
-    # *before* it emits sequenceFinished -- silently stranding listeners
-    # (e.g. napari-micromanager's _mda_running flag stays True, freezing
-    # the snap preview after a run).
+    # Implementing set_roi also fixes a teardown bug: pymmcore-plus's
+    # MDAEngine snapshots the ROI at sequence start and restores it via
+    # setROI() in teardown_sequence(). The unicore CameraDevice base raises
+    # NotImplementedError from set_roi, and that exception propagates out
+    # of MDARunner._finish_run *before* it emits sequenceFinished, silently
+    # stranding listeners (e.g. napari-micromanager's _mda_running flag
+    # stays True, freezing the snap preview after a run).
 
     def get_roi(self) -> tuple[int, int, int, int]:
         """Return the current ROI as (x, y, width, height)."""
         if self._roi is not None:
             return self._roi
-        h, w = self._sensor_hw()
+        h, w = self._frame_hw()
         return (0, 0, w, h)
 
     def set_roi(self, x: int, y: int, width: int, height: int) -> None:
         """Set a rectangular ROI; frames are cropped to it on readout."""
         x, y, width, height = int(x), int(y), int(width), int(height)
-        sh, sw = self._sensor_hw()
+        sh, sw = self._frame_hw()
         if x == 0 and y == 0 and width == sw and height == sh:
             self._roi = None  # full frame -> no crop
             return
@@ -228,10 +211,9 @@ class SimCameraDevice(CameraDevice):
                 or x + width > sw or y + height > sh):
             raise ValueError(
                 f"ROI ({x}, {y}, {width}, {height}) is out of bounds for a "
-                f"{sw}x{sh} sensor."
-            )
+                f"{sw}x{sh} frame.")
         self._roi = (x, y, width, height)
 
     def clear_roi(self) -> None:
-        """Reset the ROI to the full sensor frame."""
+        """Reset the ROI to the full frame."""
         self._roi = None

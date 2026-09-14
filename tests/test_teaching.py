@@ -13,6 +13,26 @@ def scope():
     return core, sim
 
 
+@pytest.fixture(autouse=True)
+def _restore_global_bridge():
+    """Tests that load a second microscope replace the global bridge the
+    module-scoped core's devices route through; put it back afterwards."""
+    import vmteach.bridge as b
+    saved = b.GLOBAL_BRIDGE
+    yield
+    if saved is not None:
+        b.set_global_bridge(saved)
+
+
+def in_view(sim, margin=0):
+    """Indices of cells whose centre lies in the current field of view."""
+    off, fov = sim.view_origin, sim.fov_um
+    x = sim.centers[:, 0] - off[0]
+    y = sim.centers[:, 1] - off[1]
+    return np.where((x > margin) & (x < fov - margin)
+                    & (y > margin) & (y < fov - margin))[0]
+
+
 def detect_cells(img, min_area=100):
     _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -47,9 +67,14 @@ def test_device_surface(scope):
     core, sim = scope
     assert set(core.getAvailableConfigs("Channel")) == {
         "phase-contrast", "DAPI", "membrane", "CyanStim"}
-    assert core.getStateLabels("Objective") == ("10x", "20x", "40x", "100x")
+    assert core.getStateLabels("Objective") == ("4x", "10x", "20x", "40x", "60x")
     assert "SLM" in core.getLoadedDevices()
     core.setXYPosition(10.0, 20.0)  # stage moves without error
+    core.setXYPosition(0.0, 0.0)
+    # startup state comes from the config file (System/Startup preset)
+    assert core.getStateLabel("Objective") == "10x"
+    assert core.getCurrentConfig("Channel") == "phase-contrast"
+    assert int(core.getProperty("Camera", "Binning")) == 1
 
 
 def test_stepped_mode_is_frozen_without_advance(scope):
@@ -70,22 +95,20 @@ def test_feedback_loop_steers_cells(scope):
 
     def run(n=40):
         sim.reset()
+        watched = in_view(sim, margin=40)     # cells the loop can act on
         y_prev = sim.centers[:, 1].copy()
         total_dy = np.zeros(len(y_prev))
         for _ in range(n):
-            core.setConfig("Channel", "phase-contrast")   # light OFF, acquire
+            core.setConfig("Channel", "DAPI")             # light OFF, acquire
             core.snapImage()
             img = core.getImage()
-            cells = detect_cells(img)
+            cells = detect_cells(img, min_area=20)
             core.setSLMImage("SLM", steer_mask(cells))    # upload pattern
             core.setConfig("Channel", "CyanStim")         # light ON: deliver
             advance(sim, seconds=1.0)
-            # wrap-aware displacement (periodic world boundaries)
-            dy = sim.centers[:, 1] - y_prev
-            dy -= sim.height * np.round(dy / sim.height)
-            total_dy += dy
+            total_dy += sim.centers[:, 1] - y_prev
             y_prev = sim.centers[:, 1].copy()
-        return total_dy, img
+        return total_dy[watched], img
 
     dy1, img1 = run()
     assert dy1.mean() < -25, \
@@ -122,10 +145,10 @@ def test_stimulation_gated_on_light_path(scope):
         "mask upload alone must not stimulate"
     core.setConfig("Channel", "CyanStim")
     # only cells inside the illuminated field of view can receive light
-    off = sim.camera_offset
+    off, fov = sim.view_origin, sim.fov_um
     in_view = [c for c in sim._cells
-               if off[0] + 30 < c.center[0] < off[0] + 482
-               and off[1] + 30 < c.center[1] < off[1] + 482]
+               if off[0] + 30 < c.center[0] < off[0] + fov - 30
+               and off[1] + 30 < c.center[1] < off[1] + fov - 30]
     assert in_view and all(c.is_stimulated for c in in_view), \
         "engaging the light path must deliver the pattern to in-view cells"
     core.setConfig("Channel", "phase-contrast")
@@ -230,21 +253,174 @@ def test_event_driven_mda_queue():
     assert frames == expected, f"frames received: {frames}"
 
 
-def test_stimulation_wraps_across_world_seam():
-    """A cell visible across the periodic world boundary (wrapped FOV crop)
-    must be stimulable: stimulate() wraps the world-to-viewport delta."""
-    from vmteach.cells import OptogeneticCell
+def test_cells_stay_inside_their_wells(scope):
+    """The well wall is a hard boundary: after a long run no cell pokes
+    through it, and no cell changes well."""
+    core, sim = scope
+    sim.reset()
+    well0 = sim.cell_well.copy()
+    advance(sim, seconds=20.0)
+    for c, r, w in zip(sim.centers, sim.radii, sim.cell_well):
+        assert sim.well_distance(c[0], c[1], w) + r.max() <= 1.0
+    assert np.array_equal(well0, sim.cell_well)
+    # both wells populated equally
+    assert sim.n_wells == 2 and sim.cells_per_well * 2 == sim.n_cells
 
-    cell = OptogeneticCell(600, 600, 20.0, seed=1)
-    cell.center = np.array([5.0, 300.0])   # just across the seam
-    mask = np.full((512, 512), 255, np.uint8)
-    # camera at x0=500: viewport shows world x in [500,600) U [0,412) via
-    # wrap; world x=5 appears at viewport x=(5-500)%600=105
-    cell.stimulate(mask, camera_offset=(500.0, 44.0))
-    assert cell.is_stimulated, "wrapped-FOV cell was not stimulated"
 
-    # and a cell genuinely outside the wrapped viewport stays unstimulated
-    cell2 = OptogeneticCell(600, 600, 20.0, seed=2)
-    cell2.center = np.array([450.0, 300.0])  # world x=450 -> (450-500)%600=550 >= 512
-    cell2.stimulate(mask, camera_offset=(500.0, 44.0))
-    assert not cell2.is_stimulated, "out-of-view cell was stimulated"
+def test_well_wall_visible_in_phase_only(scope):
+    """At the well edge, phase contrast shows plastic and a bright rim;
+    fluorescence shows only background (the cell-free zone)."""
+    core, sim = scope
+    sim.reset()
+    core.setStateLabel("Objective", "10x")
+    core.setXYPosition(sim.well_half + 20, 0.0)     # wall runs mid-frame
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    ph = core.getImage()
+    core.setConfig("Channel", "DAPI")
+    core.snapImage()
+    fl = core.getImage()
+    core.setXYPosition(0.0, 0.0)
+    core.setConfig("Channel", "phase-contrast")
+    inside, outside = ph[:, :200], ph[:, 300:]
+    assert np.median(outside) < np.median(inside) - 20, "plastic not darker"
+    profile = np.median(ph, axis=0)                  # column profile
+    assert profile[200:300].max() > np.median(inside) + 12, "no bright well edge"
+    assert fl[:, 300:].max() < 60, "wall visible in fluorescence"
+
+
+# ── realism: camera, objectives, binning, SLM at magnification ───────────
+
+
+def test_objective_changes_pixel_size_not_image_size(scope):
+    """A real camera has a fixed sensor: objectives change the pixel size
+    (from the .cfg pixel-size presets) and the field of view, never the
+    image dimensions."""
+    core, sim = scope
+    expected = {"4x": 2.5, "10x": 1.0, "20x": 0.5, "40x": 0.25, "60x": 0.1667}
+    for label, px in expected.items():
+        core.setStateLabel("Objective", label)
+        core.snapImage()
+        assert core.getImage().shape == (512, 512)
+        assert core.getPixelSizeUm() == pytest.approx(px, rel=1e-3)
+        assert sim.fov_um == pytest.approx(512 * px, rel=1e-3)
+    core.setStateLabel("Objective", "10x")
+
+
+def test_binning_presets_shrink_and_brighten(scope):
+    core, sim = scope
+    core.setConfig("Channel", "DAPI")
+    core.setExposure(5.0)                     # keep 4x4 out of saturation
+    assert tuple(core.getAllowedPropertyValues("Camera", "Binning")) == ("1", "2", "4")
+    means = {}
+    for b in (1, 2, 4):
+        core.setProperty("Camera", "Binning", b)
+        core.snapImage()
+        img = core.getImage()
+        assert img.shape == (512 // b, 512 // b)
+        assert core.getPixelSizeUm() == pytest.approx(1.0 * b)
+        means[b] = img[img > 60].mean() if (img > 60).any() else 0.0
+    core.setProperty("Camera", "Binning", 1)
+    core.setExposure(50.0)
+    core.setConfig("Channel", "phase-contrast")
+    assert means[2] > 2 * means[1] and means[4] > 2 * means[2], means
+    with pytest.raises(Exception):
+        core.setProperty("Camera", "Binning", 3)
+
+
+def test_phase_contrast_is_neutral_gray(scope):
+    """Background mid-gray, cell bodies slightly darker, bright halo."""
+    core, sim = scope
+    sim.reset()
+    core.setConfig("Channel", "phase-contrast")
+    core.setStateLabel("Objective", "10x")
+    core.snapImage()
+    img = core.getImage()
+    bg = np.median(img)
+    assert 100 < bg < 150, f"background {bg} is not neutral gray"
+    assert (img > bg + 25).mean() > 0.005, "no bright halos"
+    assert (img < bg - 8).mean() > 0.02, "no darker cell bodies"
+
+
+def test_slm_follows_objective_magnification(scope):
+    """The SLM maps 1:1 onto the sensor at every objective, so a spot drawn
+    on a cell's membrane in a 40x image stimulates that cell."""
+    core, sim = scope
+    sim.reset()
+    core.setStateLabel("Objective", "40x")
+    core.setConfig("Channel", "DAPI")
+    core.snapImage()
+    from vmteach import detect_nuclei
+    nuclei = detect_nuclei(core.getImage())
+    assert nuclei, "no nuclei in the 40x field"
+    cx, cy = nuclei[0]
+    r_px = 20 / core.getPixelSizeUm()               # ~cell radius in px
+    mask = np.zeros((512, 512), np.uint8)
+    cv2.circle(mask, (cx, int(cy - r_px)), int(r_px / 2), 255, -1)
+    core.setSLMImage("SLM", mask)
+    core.setConfig("Channel", "CyanStim")
+    assert any(c.is_stimulated for c in sim._cells), \
+        "spot on a 40x membrane did not stimulate"
+    # the projected light is imaged where the mask is, at 40x too
+    core.snapImage()
+    img = core.getImage()
+    assert img[mask > 0].mean() > img[mask == 0].mean() + 100
+    core.setConfig("Channel", "phase-contrast")
+    core.setStateLabel("Objective", "10x")
+
+
+def test_multi_position_fields_are_distinct(scope):
+    """The world holds 4 x 4 fields at 10x; stage moves reach new cells."""
+    core, sim = scope
+    sim.reset()
+    assert sim.well_size >= 2048 and sim.cells_per_well >= 16 * 10
+    core.setConfig("Channel", "DAPI")
+    seen = []
+    wx, wy = sim.well_positions[1]                 # second well
+    for x, y in [(0, 0), (512, 0), (0, 512), (-512, -512), (wx, wy)]:
+        core.setXYPosition(float(x), float(y))
+        core.snapImage()
+        seen.append(core.getImage())
+    assert (seen[-1] > 100).sum() > 500, "no cells in the second well"
+    core.setXYPosition(0.0, 0.0)
+    core.setConfig("Channel", "phase-contrast")
+    for a, b in zip(seen, seen[1:]):
+        assert not np.array_equal(a, b)
+
+
+def test_stage_travel_is_limited(scope):
+    """Moves beyond the travel range stop at the limit (soft limits)."""
+    core, sim = scope
+    assert sim.stage_limits == ((-1016.0, 3320.0), (-1000.0, 1000.0))
+    core.setXYPosition(5000.0, -3000.0)
+    assert core.getXYPosition() == (3320.0, -1000.0)
+    assert tuple(sim.stage) == (3320.0, -1000.0)
+    core.setXYPosition(2304.0, 0.0)             # well B centre is reachable
+    assert core.getXYPosition() == (2304.0, 0.0)
+    core.setXYPosition(0.0, 0.0)
+
+
+def test_property_change_listener_may_call_setconfig(scope):
+    """Regression for the filter-wheel hang: a propertyChanged listener
+    (e.g. the napari-micromanager channel presets widget) that calls
+    setConfig on the same device must not deadlock on the device lock."""
+    import threading
+    core, sim = scope
+
+    def snap_back(dev, prop, value):
+        if dev == "Filter Wheel" and prop == "Label":
+            core.setConfig("Channel", "phase-contrast")
+
+    core.events.propertyChanged.connect(snap_back)
+    done = threading.Event()
+
+    def worker():
+        core.setProperty("Filter Wheel", "Label", "obeYFP(514/528)")
+        done.set()
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    finished = done.wait(timeout=5.0)
+    core.events.propertyChanged.disconnect(snap_back)
+    assert finished, "setProperty deadlocked while a listener called setConfig"
+    core.setConfig("Channel", "phase-contrast")

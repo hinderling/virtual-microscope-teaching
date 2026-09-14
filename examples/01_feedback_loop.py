@@ -21,22 +21,31 @@ core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
 print("Channels:", core.getAvailableConfigs("Channel"))
 
 # %%
-# ACQUIRE: snap a phase-contrast image, exactly like on real hardware
+# LOOK: snap a phase-contrast image, exactly like on real hardware.
+# Neutral gray, cells slightly darker with a bright halo: good for your
+# eyes, but a plain threshold will not segment it.
 core.setConfig("Channel", "phase-contrast")
+core.snapImage()
+phase = core.getImage()
+
+plt.imshow(phase, cmap="gray")
+plt.title(f"{phase.shape} {phase.dtype}")
+
+# %%
+# ACQUIRE for analysis: the nuclei channel. Nuclei are bright on black and
+# never touch (cells collide first), so the simplest segmentation works.
+core.setConfig("Channel", "DAPI")
 core.snapImage()
 img = core.getImage()
 
-plt.imshow(img, cmap="gray_r")
-plt.title(f"{img.shape} {img.dtype}")
-
 # %%
-# ANALYZE: segment the cells with an Otsu threshold and find their centroids.
-# Any segmentation works here. The loop does not care how the objects
-# were found, only that it gets a list of positions.
+# ANALYZE: segment the nuclei with an Otsu threshold and find their
+# centroids. Any segmentation works here. The loop does not care how the
+# objects were found, only that it gets a list of positions.
 
 
-def detect_cells(img, min_area=100):
-    """Return a list of (cx, cy, area) for each detected cell."""
+def detect_cells(img, min_area=20):
+    """Return a list of (cx, cy, area) for each detected nucleus."""
     _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     cells = []
@@ -109,7 +118,7 @@ core.setConfig("Channel", "phase-contrast")
 
 # %%
 # CLOSE THE LOOP: acquire → analyze → decide → actuate → let time pass → repeat.
-# Note the light choreography each cycle: switching to phase-contrast for the
+# Note the light choreography each cycle: switching to DAPI for the
 # acquisition turns the stimulation light OFF; after uploading the new mask,
 # switching to CyanStim turns it back ON. Forget the switch and nothing
 # happens, which is a classic debugging moment at a real microscope.
@@ -121,7 +130,7 @@ history = []
 
 sim.reset()
 for i in range(n_cycles):
-    core.setConfig("Channel", "phase-contrast") # light off, imaging channel
+    core.setConfig("Channel", "DAPI")           # light off, imaging channel
     core.snapImage()
     img = core.getImage()                       # acquire
     cells = detect_cells(img)                   # analyze
@@ -153,7 +162,7 @@ def build_split_mask(cells, offset_px=15, spot_radius=11, shape=(512, 512)):
 sim.reset()
 start = None
 for i in range(n_cycles):
-    core.setConfig("Channel", "phase-contrast")
+    core.setConfig("Channel", "DAPI")
     core.snapImage()
     img = core.getImage()
     cells = detect_cells(img)

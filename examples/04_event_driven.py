@@ -95,8 +95,9 @@ class Controller:
                 ))
 
     def run(self):
-        # a Queue is not iterable; iter(get, sentinel) makes it one
-        self._core.run_mda(iter(self._queue.get, self.STOP))
+        # a Queue is not iterable; iter(get, sentinel) makes it one.
+        # run_mda is non-blocking and returns the acquisition thread.
+        self.thread = self._core.run_mda(iter(self._queue.get, self.STOP))
         # seed the acquisition with the first event; analysis takes over
         self._queue.put(MDAEvent(index={"t": 0}, channel=DAPI,
                                  min_start_time=0.0))
@@ -106,20 +107,24 @@ class Controller:
 # Run it. Note there is NO acquisition loop in our code anymore. The MDA
 # engine drives the microscope; our code only reacts to frames and decides
 # the next event.
+# Only the cells in the field of view can be steered (each well is 4 x 4
+# fields), so measure those.
+off, fov = sim.view_origin, sim.fov_um
+rel = sim.centers - off
+in_view = (rel > 0).all(axis=1) & (rel < fov).all(axis=1)
 y_before = sim.centers[:, 1].copy()
 
 q = Queue()
 controller = Controller(Analyzer(), core, q)
 controller.run()
 
-# run_mda is non-blocking; wait for the acquisition to finish
-while core.mda.is_running():
-    time.sleep(0.1)
+# wait for the acquisition thread to finish (polling core.mda.is_running()
+# right after run_mda is racy: the thread may not have started yet)
+controller.thread.join()
 
 dy = sim.centers[:, 1] - y_before
-dy -= sim.height * np.round(dy / sim.height)      # periodic world wrap
-print(f"\nmean displacement after {N_FRAMES} frames: {dy.mean():+.1f} px "
-      "(negative = up)")
+print(f"\nmean displacement of the {in_view.sum()} cells in view after "
+      f"{N_FRAMES} frames: {dy[in_view].mean():+.1f} um (negative = up)")
 
 # %%
 # Why bother, when the for-loop worked fine?

@@ -1,7 +1,8 @@
 from pymmcore_plus.experimental.unicore import ShutterDevice
+from vmteach.devices._base import ReentrantLockMixin
 
 
-class SimShutterDevice(ShutterDevice):
+class SimShutterDevice(ReentrantLockMixin, ShutterDevice):
 
 
     def __init__(self):

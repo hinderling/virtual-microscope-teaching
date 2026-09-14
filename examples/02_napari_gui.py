@@ -23,14 +23,17 @@ viewer = launch_gui(core)
 # Try in the GUI (see docs/gui_walkthrough.md for annotated screenshots):
 #  1. Press the Snap button           -> a "preview" layer appears
 #  2. Press Live                      -> cells jiggle and crawl in real time
-#  3. Switch Objectives: 10x -> 40x   -> smaller field of view, same sample
+#  3. Switch Objectives: 10x -> 40x   -> smaller field of view (same 512x512
+#                                        image, smaller pixels), same sample
 #  4. Change Channel: phase-contrast -> DAPI / membrane
 #  5. Change Exposure                 -> brighter / noisier image
+#  6. Camera > Binning (property browser): 1 / 2 / 4 -> smaller, brighter
+#                                        frame (lower the exposure to match)
 
 # %%
 # Now do EXACTLY the same things from code, and watch the GUI react:
 core.snapImage()                       # = pressing "Snap"  (preview updates!)
-core.setState("Objective", 2)          # = choosing "40x" in the dropdown
+core.setState("Objective", 3)          # = choosing "40x" in the dropdown
 core.setConfig("Channel", "DAPI")      # = choosing "DAPI" in the dropdown
 core.setExposure(100.0)                # = typing 100 in the Exposure box
 core.snapImage()
@@ -42,7 +45,7 @@ core.snapImage()
 
 # %%
 # Back to defaults for the next example
-core.setState("Objective", 0)
+core.setState("Objective", 1)          # 10x
 core.setConfig("Channel", "phase-contrast")
 core.setExposure(50.0)
 

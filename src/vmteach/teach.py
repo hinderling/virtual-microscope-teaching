@@ -31,7 +31,9 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
 
     Args:
         backend: Only ``"optogenetic"`` exists in this teaching package.
-        n_cells: Number of simulated cells.
+        n_cells: Cell density, as cells per 10x field of view (512 x 512
+            um). The world is 2048 x 2048 um by default (4 x 4 fields), so
+            the total population is 16x this number.
         seed: Random seed. Same seed, same experiment, on every machine.
         mode: ``"stepped"`` (default): simulated time advances only via
             :func:`advance`; fully deterministic.
@@ -55,8 +57,6 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
     if mode not in ("stepped", "realtime"):
         raise ValueError(f"mode must be 'stepped' or 'realtime', got {mode!r}")
 
-    from pymmcore_plus.experimental.unicore import UniMMCore
-
     from vmteach.bridge import SimulationBridge, set_global_bridge
     from vmteach.sim import OptoCellSim
 
@@ -64,9 +64,14 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
     bridge = SimulationBridge(sim)
     set_global_bridge(bridge)
 
-    core = UniMMCore()
+    global _VirtualMicroscopeCore
+    if _VirtualMicroscopeCore is None:
+        _VirtualMicroscopeCore = _make_core_class()
+    core = _VirtualMicroscopeCore()
+    # devices, channels, per-objective pixel sizes and the startup state
+    # (10x, phase-contrast, binning 1) all come from the config file, as
+    # they would for real hardware
     core.loadSystemConfiguration(str(Path(__file__).parent / "optogenetic.cfg"))
-    _install_pixel_size(core, sim)
 
     if warmup:
         print("Preparing virtual microscope ...", end=" ", flush=True)
@@ -85,18 +90,46 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
     return core, sim
 
 
-def _install_pixel_size(core, sim) -> None:
-    """getPixelSizeUm() reflecting the current objective (10x = 1 um/px)."""
-    factors = {0: 1, 1: 2, 2: 4, 3: 8}
+def _make_core_class():
+    from pymmcore_plus.experimental.unicore import UniMMCore
 
-    def _pixel_size(cached: bool = False) -> float:
-        try:
-            state = core.getState("Objective")
-        except Exception:
-            return sim.world_pixel_size_um
-        return sim.world_pixel_size_um / factors.get(state, 1)
+    class VirtualMicroscopeCore(UniMMCore):
+        """UniMMCore that resolves pixel-size presets against Python devices.
 
-    core.getPixelSizeUm = _pixel_size
+        The C++ core matches pixel-size configs (``ConfigPixelSize`` in the
+        .cfg) only against its own devices, so with a pure-Python objective
+        ``getCurrentPixelSizeConfig()`` is always empty. Resolve it here so
+        ``core.getPixelSizeUm()`` reports the objective's pixel size (times
+        the camera binning), as it does on a real system.
+        """
+
+        def getCurrentPixelSizeConfig(self, cached: bool = False) -> str:
+            get = self.getPropertyFromCache if cached else self.getProperty
+            for res in self.getAvailablePixelSizeConfigs():
+                data = self.getPixelSizeConfigData(res)
+                try:
+                    if all(str(get(dev, prop)) == str(val)
+                           for dev, prop, val in data):
+                        return res
+                except Exception:
+                    continue
+            return ""
+
+        def getPixelSizeUm(self, cached: bool = False) -> float:
+            res = self.getCurrentPixelSizeConfig(cached)
+            if not res:
+                return 0.0
+            binning = 1.0
+            try:
+                binning = float(self.getProperty(self.getCameraDevice(), "Binning"))
+            except Exception:
+                pass
+            return self.getPixelSizeUmByID(res) * binning * self.getMagnificationFactor()
+
+    return VirtualMicroscopeCore
+
+
+_VirtualMicroscopeCore = None
 
 
 def advance(sim, seconds: float = 1.0, dt: float = 0.05) -> None:

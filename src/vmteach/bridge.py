@@ -35,24 +35,26 @@ class SimulationBridge:
     # ── camera ──────────────────────────────────────────────────────────
 
     def snap(self, exposure: float, brightness: float, gain: float = 1.0,
-             pixel_mask=None, **kwargs) -> np.ndarray:
+             binning: int = 1, **kwargs) -> np.ndarray:
         if self._engine is not None:
             self._engine.touch()
         img = self._sim.snap_frame(mask=self.get_slm_mask(),
-                                   exposure=exposure, intensity=brightness)
+                                   exposure=exposure, intensity=brightness,
+                                   binning=binning)
         if gain != 1.0:
             img = np.clip(img.astype(np.float32) * gain, 0, 255).astype(np.uint8)
         return img
 
     # ── stage / focus ───────────────────────────────────────────────────
 
-    def set_stage(self, x: float, y: float) -> None:
-        """(0, 0) centres the viewport on the world; +x/+y pans right/down."""
-        sim = self._sim
-        sim.camera_offset = np.array([
-            sim.width / 2.0 + x - sim.viewport_width / 2.0,
-            sim.height / 2.0 + y - sim.viewport_height / 2.0,
-        ])
+    def set_stage(self, x: float, y: float) -> tuple[float, float]:
+        """Move the stage (um; (0, 0) = centre of the first well).
+
+        Clamped to the travel range; returns the position actually reached.
+        """
+        x, y = self._sim.clamp_stage(x, y)
+        self._sim.stage[:] = (x, y)
+        return x, y
 
     def set_focus(self, z: float) -> None:
         self._sim.set_focal_plane(z)
@@ -90,12 +92,14 @@ class SimulationBridge:
             return
         if self._engine is not None:
             with self._engine.lock:
+                self._sim._update_from_devices()
                 self._sim._handle_mask(mask)
         else:
+            self._sim._update_from_devices()
             self._sim._handle_mask(mask)
 
     def get_slm_mask(self) -> np.ndarray:
         if self._current_slm_mask is not None:
             return self._current_slm_mask
-        return np.zeros((self._sim.viewport_height, self._sim.viewport_width),
-                        dtype=bool)
+        from vmteach.sim import SLM_SHAPE
+        return np.zeros(SLM_SHAPE, dtype=np.uint8)

@@ -1,23 +1,63 @@
-"""Base cell module with core physics and properties."""
+"""Cell physics (numba) and the optogenetic cell.
+
+The population lives in flat arrays owned by :class:`vmteach.sim.OptoCellSim`
+(``centers``, ``velocities``, ``radii``); each :class:`OptogeneticCell` holds
+*views* into its own row, so physics, collisions, stimulation and rendering
+all see one copy of the state and nothing has to be synced.
+
+Cells live inside wells: rounded squares with a hard boundary that the
+cells collide with (1 world px = 1 um; nothing wraps).
+"""
 import numpy as np
 from numba import njit, prange
-from numba.types import float64 as no_float64
-import numba.types as nbt
 
 
 # ------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------ #
 @njit(cache=True)
-def wrap_position(pos: np.ndarray, width: float, height: float) -> np.ndarray:
-    """Wrap position for periodic boundaries conditions."""
-    return np.array([pos[0] % width, pos[1] % height])
+def well_sdf(px: float, py: float, half: float, corner: float) -> tuple:
+    """Signed distance (negative inside) from a point, relative to the well
+    centre, to the boundary of a rounded square of half-size ``half`` and
+    corner radius ``corner``; plus the outward unit normal."""
+    hx = half - corner
+    qx = abs(px) - hx
+    qy = abs(py) - hx
+    ox = max(qx, 0.0)
+    oy = max(qy, 0.0)
+    outer = np.sqrt(ox * ox + oy * oy)
+    d = outer + min(max(qx, qy), 0.0) - corner
+    sx = 1.0 if px >= 0 else -1.0
+    sy = 1.0 if py >= 0 else -1.0
+    if outer > 0.0:
+        gx, gy = sx * ox / outer, sy * oy / outer
+    elif qx > qy:
+        gx, gy = sx, 0.0
+    else:
+        gx, gy = 0.0, sy
+    return d, gx, gy
+
+
+@njit(cache=True)
+def confine(center: np.ndarray, vel: np.ndarray, rmax: float,
+            wx: float, wy: float, half: float, corner: float) -> None:
+    """Keep a cell (in place) inside its well: push the centre back so the
+    membrane touches the wall at most, and drop the outward velocity."""
+    d, gx, gy = well_sdf(center[0] - wx, center[1] - wy, half, corner)
+    push = d + rmax
+    if push > 0.0:
+        center[0] -= push * gx
+        center[1] -= push * gy
+        vn = vel[0] * gx + vel[1] * gy
+        if vn > 0.0:
+            vel[0] -= vn * gx
+            vel[1] -= vn * gy
+
 
 @njit(cache=True)
 def polygon_area(pts: np.ndarray) -> float:
-    """Calculate polygon area"""
+    """Calculate polygon area (shoelace)."""
     x, y = pts[:, 0], pts[:, 1]
-    #return 0.5 * np.abs(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
     n = len(x)
     area = 0.0
     for i in range(n):
@@ -25,6 +65,7 @@ def polygon_area(pts: np.ndarray) -> float:
         area += x[i] * y[j]
         area -= y[i] * x[j]
     return abs(area) * 0.5
+
 
 @njit(cache=True)
 def calculate_vertices(center: np.ndarray, angles: np.ndarray, r: np.ndarray) -> np.ndarray:
@@ -35,14 +76,16 @@ def calculate_vertices(center: np.ndarray, angles: np.ndarray, r: np.ndarray) ->
     vertices[:, 1] = center[1] + np.sin(angles) * r
     return vertices
 
+
 @njit(cache=True)
 def update_cell_physics(center: np.ndarray, vel: np.ndarray, r: np.ndarray,
-                         angles: np.ndarray, base_r: float, area0: float,
-                         width: float, height: float, dt: float,
-                         friction: float = 3.0, brownian_d: float = 15.0,
-                         curvature_relax: float = 0.12, radial_relax: float = 0.08,
-                         ruffle_std: float = 0.01, seed: int = 0) -> tuple:
-    """Update cell physics"""
+                        angles: np.ndarray, base_r: float, area0: float,
+                        dt: float,
+                        friction: float = 3.0, brownian_d: float = 15.0,
+                        curvature_relax: float = 0.12, radial_relax: float = 0.08,
+                        ruffle_std: float = 0.01, seed: int = 0) -> tuple:
+    """One physics step for one cell (Brownian motion, friction, membrane
+    ruffling and relaxation, area conservation)."""
     np.random.seed(seed)
 
     # Brownian motion
@@ -52,7 +95,6 @@ def update_cell_physics(center: np.ndarray, vel: np.ndarray, r: np.ndarray,
 
     # Update position
     center += vel * dt
-    center = wrap_position(center, width, height)
 
     # Apply friction
     vel *= max(0.0, 1.0 - friction * dt)
@@ -76,281 +118,169 @@ def update_cell_physics(center: np.ndarray, vel: np.ndarray, r: np.ndarray,
     return center, vel, r
 
 
-@njit(cache=True)
-def check_collision(center1: np.ndarray, center2: np.ndarray,
-                    r1: np.ndarray, r2: np.ndarray,
-                    width: float, height: float) -> tuple:
-    """Fast collision detection and resolution"""
-    # Calculate wrapped distance
-    dvec = center2 - center1
-    dvec[0] -= width * np.round(dvec[0] / width)
-    dvec[1] -= height * np.round(dvec[1] / height)
-
-    dist = np.sqrt(dvec[0]**2 + dvec[1]**2)
-    if dist == 0:
-        return False, center1, center2
-    
-    overlap = np.max(r1) + np.max(r2) - dist
-    if overlap <= 0:
-        return False, center1, center2
-    
-    # resolve collision
-    n = dvec / dist
-    shift = 0.5 * (overlap + 0.01) * n
-    new_center1 = center1 - shift
-    new_center2 = center2 + shift
-
-    # Wrap position
-    new_center1 = wrap_position(new_center1, width, height)
-    new_center2 = wrap_position(new_center2, width, height)
-
-    return True, new_center1, new_center2
-
-
 @njit(parallel=True, cache=True)
 def update_all_cells_parallel(centers: np.ndarray, velocities: np.ndarray,
                               radii: np.ndarray, angles: np.ndarray,
                               base_radii: np.ndarray, areas: np.ndarray,
-                              width: float, height: float, dt: float,
+                              cell_well: np.ndarray, wells: np.ndarray,
+                              half: float, corner: float, dt: float,
                               friction: float = 3.0, brownian_d: float = 15.0,
                               step_count: int = 0) -> None:
-    """Update all cells in parallel using Numba prange"""
+    """Update all cells in parallel (in place) using Numba prange, then
+    confine each to its well (``wells``: (n_wells, 2) centres)."""
     n_cells = len(centers)
-    for i in prange(n_cells): # parallel loop
+    for i in prange(n_cells):  # parallel loop
         centers[i], velocities[i], radii[i] = update_cell_physics(
             centers[i], velocities[i], radii[i], angles, base_radii[i], areas[i],
-            width, height, dt, friction, brownian_d,
+            dt, friction, brownian_d,
             seed=i + step_count * n_cells
         )
+        w = cell_well[i]
+        confine(centers[i], velocities[i], radii[i].max(),
+                wells[w, 0], wells[w, 1], half, corner)
 
 
+@njit(cache=True)
+def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
+                           radii: np.ndarray, cell_well: np.ndarray,
+                           wells: np.ndarray, half: float, corner: float) -> None:
+    """Pairwise overlap resolution (in place).
 
-
+    Overlapping cells are pushed apart symmetrically along the line of
+    centres and both velocities are zeroed; the pair is then confined to
+    its wells again. Deterministic pair order (i < j), so a rerun gives
+    bit-identical positions.
+    """
+    n = centers.shape[0]
+    maxr = np.empty(n)
+    for i in range(n):
+        maxr[i] = radii[i].max()
+    for i in range(n):
+        for j in range(i + 1, n):
+            dx = centers[j, 0] - centers[i, 0]
+            dy = centers[j, 1] - centers[i, 1]
+            dist = np.sqrt(dx * dx + dy * dy)
+            if dist == 0.0:
+                continue
+            overlap = maxr[i] + maxr[j] - dist
+            if overlap <= 0.0:
+                continue
+            s = 0.5 * (overlap + 0.01)
+            nx, ny = dx / dist, dy / dist
+            centers[i, 0] -= s * nx
+            centers[i, 1] -= s * ny
+            centers[j, 0] += s * nx
+            centers[j, 1] += s * ny
+            velocities[i, 0] = 0.0
+            velocities[i, 1] = 0.0
+            velocities[j, 0] = 0.0
+            velocities[j, 1] = 0.0
+            wi, wj = cell_well[i], cell_well[j]
+            confine(centers[i], velocities[i], maxr[i],
+                    wells[wi, 0], wells[wi, 1], half, corner)
+            confine(centers[j], velocities[j], maxr[j],
+                    wells[wj, 0], wells[wj, 1], half, corner)
 
 
 # ------------------------------------------------------------- #
 # Cell
 # ------------------------------------------------------------- #
 class CellBase:
-    """Base cell class with core physics"""
-    def __init__(self, width: float, height: float, base_radius: float, vertices: int = 24, seed: int = 0):
-        self.width = width
-        self.height = height
+    """Base cell: geometry (centre, vertex radii) and physics parameters.
+
+    ``center``, ``vel`` and ``r`` are plain arrays at construction; the sim
+    replaces them with views into its population arrays (see
+    ``OptoCellSim._init_arrays``). All updates must therefore be in place.
+    """
+
+    def __init__(self, base_radius: float, vertices: int = 24, seed: int = 0):
         self.vertices = vertices
         self.seed = seed
 
-        # Initialize with random variations (# TODO checks later)
         rng = np.random.RandomState(seed)
         self.base_r = base_radius * (0.85 + 0.3 * rng.random())
         self.r = np.full(vertices, self.base_r, dtype=np.float64)
         self.angles = np.linspace(0, 2 * np.pi, vertices, endpoint=False)
         self.area0 = np.pi * self.base_r ** 2
 
-        # Position and velocity
-        self.center = np.array([rng.uniform(0, width), rng.uniform(0, height)], dtype=np.float64)
+        self.center = np.zeros(2, dtype=np.float64)   # placed by the sim
         self.vel = np.zeros(2, dtype=np.float64)
-        self.z_position: float = 0.0
-
-        # Physics parameters
-        self.friction: float = 3.0
-        self.brownian_d: float = 15.0
-        self.curvature_relax: float = 0.15
-        self.radial_relax: float = 0.10
-        self.ruffle_std: float = 0.03
-
-        # Fluorescence properties
-        self.nucleus_fluorescence = 0.0
-        self.membrane_fluorescence = np.zeros(vertices, dtype=np.float64)
-
         self._rng = rng
-
 
     @property
     def vertices_positions(self) -> np.ndarray:
-        """Get absolute vertex positions."""
+        """Absolute vertex positions (world px)."""
         return calculate_vertices(self.center, self.angles, self.r)
-    
-    def update_physics(self, dt: float) -> None:
-        """Update cell physics (movement, shape deformation)"""
-        self.center, self.vel, self.r = update_cell_physics(
-            self.center, self.vel, self.r, self.angles, self.base_r,
-            self.area0, self.width, self.height, dt, self.friction, self.brownian_d,
-            self.curvature_relax, self.radial_relax, self.ruffle_std, self.seed
-            )
 
-    
-    def check_collision(self, other: 'CellBase') -> bool:
-        """Check and resolve collision with another cell."""
-        collided, new_center1, new_center2 = check_collision(
-            self.center, other.center, self.r, other.r, self.width, self.height
-        )
-
-        if collided:
-            self.center = new_center1
-            other.center = new_center2
-            self.vel[:] = 0
-            other.vel[:] = 0
-
-        return collided
-    
     def _conserve_area(self) -> None:
-        """Conserve cell area after deformation."""
-        pts = self.vertices_positions
-        area = polygon_area(pts)
+        """Rescale the radii in place so the polygon keeps its rest area."""
+        area = polygon_area(self.vertices_positions)
         if area > 0:
             self.r *= np.sqrt(self.area0 / area)
 
-"""Optogenetic cell behaviour module."""
-import numpy as np
-
-
-
 
 class OptogeneticCell(CellBase):
+    """A cell that protrudes toward, and migrates toward, projected light."""
 
-    def __init__(self, *args, protrusion_gain: float = 0.05, impulse: float = 24.0, **kwargs):
+    def __init__(self, *args, protrusion_gain: float = 0.05,
+                 impulse: float = 24.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.protrusion_gain = protrusion_gain
         self.impulse = impulse
         self.is_stimulated = False
 
+    def stimulate(self, mask: np.ndarray, origin=(0.0, 0.0),
+                  scale: float = 1.0) -> None:
+        """Apply optogenetic stimulation from a light pattern.
 
-    def stimulate(self, mask: np.ndarray, camera_offset: tuple[float, float] = (0.0, 0.0)) -> None:
-        """Apply optogenetic stimulation based on mask.
-
-        The mask is in camera/viewport space (matching the rendered image).
-        Vertex world positions are converted to viewport coordinates using
-        *camera_offset* before being checked against the mask.
+        ``mask`` is the pattern *as projected on the sample*, in camera
+        sensor pixels. ``origin`` is the world position (px) of sensor
+        pixel (0, 0) and ``scale`` the number of sensor pixels per world
+        px (the objective magnification), so vertex world positions map
+        to sensor pixels as ``p = (x - origin) * scale``.
         """
         if mask is None or not mask.any():
             self.is_stimulated = False
             return
 
-        # Convert vertex world positions to viewport (camera-relative)
-        # coords. The world is periodic and the camera crop wraps around
-        # its boundary, so the delta must wrap too: viewport pixel p shows
-        # world x = (x0 + p) mod W, hence p = (x - x0) mod W. Without the
-        # wrap, cells visible across the world seam could never be
-        # stimulated.
         vertices = self.vertices_positions
-        vx = (vertices[:, 0] - camera_offset[0]) % self.width
-        vy = (vertices[:, 1] - camera_offset[1]) % self.height
+        vx = (vertices[:, 0] - origin[0]) * scale
+        vy = (vertices[:, 1] - origin[1]) * scale
 
-        # Check which vertices fall within the mask bounds
-        inside = (vx < mask.shape[1]) & (vy < mask.shape[0])
-
+        # vertices that fall on the sensor at all
+        inside = ((vx >= -0.5) & (vx < mask.shape[1] - 0.5)
+                  & (vy >= -0.5) & (vy < mask.shape[0] - 0.5))
         if not inside.any():
             self.is_stimulated = False
             return
 
-        # Get pixel indices for vertices inside bounds (round, not truncate,
-        # to avoid systematic sub-pixel bias that skews the force direction)
-        ix = np.round(vx[inside]).astype(int)
-        iy = np.round(vy[inside]).astype(int)
-        # Clamp after rounding (a vertex at 511.6 rounds to 512 which is out of bounds)
-        ix = np.clip(ix, 0, mask.shape[1] - 1)
-        iy = np.clip(iy, 0, mask.shape[0] - 1)
-
-        # Check mask at vertex position
+        # round (not truncate) to avoid a systematic sub-pixel bias in the
+        # force direction; clamp after rounding (511.6 -> 512 is out of bounds)
+        ix = np.clip(np.round(vx[inside]).astype(int), 0, mask.shape[1] - 1)
+        iy = np.clip(np.round(vy[inside]).astype(int), 0, mask.shape[0] - 1)
         hit = mask[iy, ix] > 0
-
         if not hit.any():
             self.is_stimulated = False
             return
 
         self.is_stimulated = True
-
-        # Find which vertices to protrude (boolean index into inside-subset)
         idx = np.where(inside)[0][hit]
 
-        # Apply protrusion
+        # protrusion of the illuminated vertices (in place: r is a view)
         self.r[idx] += self.protrusion_gain * self.base_r
-        self.r = np.clip(self.r, 0.4 * self.base_r, 2.2 * self.base_r)
+        np.clip(self.r, 0.4 * self.base_r, 2.2 * self.base_r, out=self.r)
         self._conserve_area()
 
-        # Apply impulse toward stimulated region, scaled by fraction of
-        # vertices illuminated so partial stimulation gives proportional force.
-        # Sets the velocity component toward the light (not accumulative) so
-        # the result is frame-rate independent.  Perpendicular Brownian jitter
-        # is preserved for natural-looking motion.
-        hit_vertices = vertices[idx]
-        target = np.mean(hit_vertices, axis=0)
+        # impulse toward the illuminated region, scaled by the illuminated
+        # fraction. Sets (does not add) the velocity component toward the
+        # light, so the result is frame-rate independent; the perpendicular
+        # Brownian component is preserved.
+        target = np.mean(vertices[idx], axis=0)
         direction = target - self.center
         norm = np.linalg.norm(direction)
-
         if norm > 0:
             stim_fraction = len(idx) / len(self.r)
             direction_unit = direction / norm
             desired_speed = self.impulse * stim_fraction
             current_proj = np.dot(self.vel, direction_unit)
             self.vel += direction_unit * (desired_speed - current_proj)
-
-"""Spatial indexing for fast collision detection."""
-import numpy as np
-from typing import List, Tuple, Set
-
-
-
-class SpatialGrid:
-    """Spatial grid for efficient collision detection."""
-
-    def __init__(self, width: float, height: float, cell_size: float = 50.0):
-        self.width = width
-        self.height = height
-        self.cell_size = cell_size
-
-        self.grid_width = int(np.ceil(width / cell_size))
-        self.grid_height = int(np.ceil(height / cell_size))
-        self.grid = {}
-
-
-    def clear(self) -> None:
-        """Clear the grid"""
-        self.grid.clear()
-
-    def add_cell(self, cell: CellBase, index: int) -> None:
-        """Add a cell to the grid."""
-        grid_pos = self._get_grid_position(cell.center)
-
-        # Add to multiple grid cells if cell is large
-        radius = np.max(cell.r)
-        cell_to_check = int(np.ceil(radius / self.cell_size))
-
-        for dx in range(-cell_to_check, cell_to_check + 1):
-            for dy in range(-cell_to_check, cell_to_check+1):
-                gx = (grid_pos[0] + dx) % self.grid_width
-                gy = (grid_pos[1] + dy) % self.grid_height
-                key = (gx, gy)
-
-                if key not in self.grid:
-                    self.grid[key] = []
-                
-                self.grid[key].append(index)
-    
-
-    def get_potential_collisions(self, cell: CellBase, index: int) -> Set[int]:
-        """Get indices of cells that might collide with given cell."""
-        grid_pos = self._get_grid_position(cell.center)
-        potential = set()
-
-        radius = np.max(cell.r)
-        cells_to_check = int(np.ceil(radius / self.cell_size))
-
-        for dx in range(-cells_to_check, cells_to_check + 1):
-            for dy in range(-cells_to_check, cells_to_check + 1):
-                gx = (grid_pos[0] + dx) % self.grid_width
-                gy = (grid_pos[1] + dy) % self.grid_height
-                key = (gx, gy)
-
-                if key in self.grid:
-                    for other_index in self.grid[key]:
-                        if other_index != index:
-                            potential.add(other_index)
-
-        return potential
-
-    def _get_grid_position(self, pos: np.ndarray) -> Tuple[int, int]:
-        """Convert position to grid coordinates."""
-        gx = int(pos[0] / self.cell_size) % self.grid_width
-        gy = int(pos[1] / self.cell_size) % self.grid_height
-        return (gx, gy)
