@@ -104,6 +104,21 @@ def _make_core_class():
         a real system.
         """
 
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            # UniMMCore's Python state devices emit propertyChanged BEFORE
+            # the core writes its property cache, so listeners that react by
+            # reading getPropertyFromCache (e.g. the GUI channel widget,
+            # which then shows "<no match>") see the previous value. Sync
+            # the cache in a handler connected here, at construction:
+            # psygnal runs callbacks in connection order, so this runs
+            # before any widget's. Drop once fixed upstream.
+            self.events.propertyChanged.connect(self._sync_pydevice_cache)
+
+        def _sync_pydevice_cache(self, device: str, prop: str, value) -> None:
+            if device in self._pydevices:
+                self._state_cache[(device, prop)] = value
+
         def getCurrentPixelSizeConfig(self, cached: bool = False) -> str:
             # Python devices are always read live: the C++ property cache is
             # only refreshed by getProperty, not by setProperty/setStateLabel
