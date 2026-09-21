@@ -106,6 +106,11 @@ def _make_core_class():
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
+            # setConfig reentrancy guard (per thread) and cross-thread
+            # serialization of the paused-emission window; see setConfig.
+            import threading
+            self._in_set_config = threading.local()
+            self._set_config_lock = threading.Lock()
             # UniMMCore's Python state devices emit propertyChanged BEFORE
             # the core writes its property cache, so listeners that react by
             # reading getPropertyFromCache (e.g. the GUI channel widget,
@@ -118,6 +123,40 @@ def _make_core_class():
         def _sync_pydevice_cache(self, device: str, prop: str, value) -> None:
             if device in self._pydevices:
                 self._state_cache[(device, prop)] = value
+
+        def setConfig(self, groupName: str, configName: str) -> None:
+            """Apply a preset atomically for propertyChanged listeners.
+
+            UniMMCore applies a preset's Python device properties one by
+            one, each emitting propertyChanged synchronously on the calling
+            thread, so listeners observe half-applied presets. pymmcore-
+            widgets' PresetsWidget re-matches presets on every such event;
+            in the mid-config window where no preset matches it parks its
+            combo on '<no match>', and on the next event removes that item
+            OUTSIDE signals_blocked, which moves the Qt current item and
+            re-enters setConfig with the OLD preset, silently reverting
+            the switch (channel changes from the GUI 'do nothing').
+
+            Queue the emissions and flush them after the preset is fully
+            applied: every listener then evaluates against the final,
+            consistent state. The property cache is written by setProperty
+            during application regardless.
+
+            A listener may itself call setConfig (the presets widget does
+            on some paths). Pausing the signal again during its own flush
+            recurses endlessly, so nested calls apply directly; their
+            synchronous emissions converge because state devices skip
+            no-op moves.
+            """
+            if getattr(self._in_set_config, "active", False):
+                return super().setConfig(groupName, configName)
+            with self._set_config_lock:
+                self._in_set_config.active = True
+                try:
+                    with self.events.propertyChanged.paused(reducer=None):
+                        super().setConfig(groupName, configName)
+                finally:
+                    self._in_set_config.active = False
 
         def getCurrentPixelSizeConfig(self, cached: bool = False) -> str:
             # Python devices are always read live: the C++ property cache is
