@@ -237,17 +237,17 @@ def test_event_driven_mda_queue():
                            min_start_time=(t + 1) * 0.2))
 
     core.mda.events.frameReady.connect(on_frame)
-    core.run_mda(iter(q.get, STOP))
+    # keep the thread handle: polling is_running() right after run_mda is
+    # racy, the acquisition thread may not have started yet
+    th = core.run_mda(iter(q.get, STOP))
     q.put(MDAEvent(index={"t": 0},
                    channel={"config": "miRFP", "group": "Channel"}))
-    deadline = time.time() + 15
-    while core.mda.is_running() and time.time() < deadline:
-        time.sleep(0.05)
+    th.join(timeout=15)
     core.mda.events.frameReady.disconnect(on_frame)
     from vmteach.bridge import GLOBAL_BRIDGE
     if GLOBAL_BRIDGE is not None and GLOBAL_BRIDGE._engine is not None:
         GLOBAL_BRIDGE._engine.stop()
-    assert not core.mda.is_running(), "MDA did not finish"
+    assert not th.is_alive(), "MDA did not finish"
     expected = [(0, "miRFP"), (0, "CyanStim"), (1, "miRFP"), (1, "CyanStim"),
                 (2, "miRFP"), (2, "CyanStim")]
     assert frames == expected, f"frames received: {frames}"

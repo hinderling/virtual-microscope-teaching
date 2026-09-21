@@ -144,10 +144,6 @@ Snap, Live (~10 fps of crawling simulated cells), channel and objective dropdown
 
 ![results explorer](docs/images/results_explorer.png)
 
-## Provenance
-
-The cell physics (numba vertex model, optogenetic response) is taken from [hinderling/virtual-microscope](https://github.com/hinderling/virtual-microscope) at commit `25ddf57` (branch `virtual-env`). Rendering, optics, the device bridge, and the device set were rewritten for this package: teaching needs speed, determinism, and a small readable codebase more than the full simulator's 35 specimen backends.
-
 ## License
 
 MIT, see [LICENSE](LICENSE). If you use this in teaching or research, please cite the FARO paper (see [CITATION.cff](CITATION.cff)).
