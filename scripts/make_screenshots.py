@@ -20,13 +20,18 @@ OUT = "docs/images"
 WINDOW = (1500, 950)
 
 
-def segment(img):
-    """Label mask from the phase image (for the segmentation layer)."""
-    _, b = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+def segment(nuclei_img):
+    """Label mask from the miRFP nuclei image (for the segmentation layer).
+
+    The phase image cannot be thresholded directly (its background is the
+    bright well interior), which is exactly why the taught pipeline
+    segments the nuclear marker channel."""
+    _, b = cv2.threshold(nuclei_img, 0, 255,
+                         cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cts, _ = cv2.findContours(b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    seg, lbl = np.zeros_like(img, np.int32), 1
+    seg, lbl = np.zeros_like(nuclei_img, np.int32), 1
     for c in cts:
-        if cv2.contourArea(c) < 100:
+        if cv2.contourArea(c) < 20:
             continue
         cv2.drawContours(seg, [c], -1, lbl, -1)
         lbl += 1
@@ -57,7 +62,8 @@ def shot_results():
     for _ in range(80):
         core.setConfig("Channel", "miRFP")      # robust detection channel
         core.snapImage()
-        cells = detect_nuclei(core.getImage())
+        nuc = core.getImage().copy()
+        cells = detect_nuclei(nuc)
         core.setConfig("Channel", "phase-contrast")
         core.snapImage()
         img = core.getImage()
@@ -66,11 +72,12 @@ def shot_results():
             dy = -15 if cx < 256 else 15
             cv2.circle(mask, (cx, int(np.clip(cy + dy, 0, 511))), 11, 255, -1)
         core.setSLMImage("SLM", mask)
+        core.setConfig("Channel", "CyanStim")   # gated delivery
         advance(sim, 1.0)
         imgs.append(img.copy())
         masks.append(mask)
         cents.append(cells)
-        segs.append(segment(img))
+        segs.append(segment(nuc))
 
     viewer = show_results(imgs, masks=masks, centroids=cents,
                           segmentations=segs, name="split steering")
