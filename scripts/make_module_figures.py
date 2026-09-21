@@ -3,6 +3,11 @@
 Usage:  .venv/bin/python scripts/make_module_figures.py [out_dir]
 
 Produces (deterministic — same seeds as the course activities):
+    channel_gallery.png          every channel + pseudo-color composite (module A)
+    photoactivation_expected.png KTR before / projected light / after / reversal
+    keep_active_expected.png     activity curves: one pulse vs closed loop
+    pipeline_explained.png       4-step image analysis on a 3-cell crop
+    tracking_explained.png       linked tracks on the same crop
     act2_steering_expected.png   before/after of the steer-all-up loop
     act2_split_expected.png      per-object decision: left up, right down
     exercise_letter_expected.png letter assembly result (nuclei routing)
@@ -226,11 +231,13 @@ def fig_pipeline():
     dapi0 = snap("miRFP")
     _, binary0 = cv2.threshold(dapi0, 0, 255,
                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    cells0 = detect_nuclei(dapi0)
+    # include border-clipped nuclei here: the crop search counts every
+    # nucleus near a window, clipped or not
+    cells0 = detect_nuclei(dapi0, exclude_border=False)
 
     # crop window with exactly 3 nuclei, clear of the label area (top ~50 px)
     box = 135
-    cx0 = cy0 = None
+    candidates = []
     for y in range(0, 512 - box, 5):
         for x in range(0, 512 - box, 5):
             inside = [(cx, cy) for cx, cy in cells0
@@ -239,12 +246,11 @@ def fig_pipeline():
             n_total = sum(1 for cx, cy in cells0
                           if x - 20 < cx < x + box + 20
                           and y - 20 < cy < y + box + 20)
-            if len(inside) == 3 and n_total == 3:
-                cx0, cy0 = x, y
-                break
-        if cx0 is not None:
-            break
-    assert cx0 is not None, "no 3-cell crop found — adjust box/seed"
+            if len(inside) == 3:
+                candidates.append((n_total, x, y))
+    assert candidates, "no 3-cell crop found — adjust box/seed"
+    # the window with 3 well-centered nuclei and the fewest neighbours
+    _, cx0, cy0 = min(candidates)
 
     # ── unstimulated time-lapse to accumulate tracks (pure analysis:
     #    the cells move by their own motility, no light involved) ────────
@@ -265,7 +271,7 @@ def fig_pipeline():
         return np.stack([g] * 3, axis=-1)
 
     p1 = frame_panel(to_rgb(crop(phase0)), "1. Acquire: phase contrast")
-    p2 = frame_panel(to_rgb(crop(dapi0)), "2. Acquire: nuclei (DAPI)")
+    p2 = frame_panel(to_rgb(crop(dapi0)), "2. Acquire: nuclei (miRFP, H2B)")
     p3 = frame_panel(to_rgb(crop(binary0)), "3. Threshold (Otsu)")
 
     # panel 4: connected components + centroids (at t = 0)
@@ -293,11 +299,14 @@ def fig_pipeline():
         poly = np.column_stack([(pts[:, 1] - cx0) * SC,
                                 (pts[:, 0] - cy0) * SC]).astype(np.int32)
         cv2.polylines(img5, [poly], False, (30, 110, 30), 3, cv2.LINE_AA)
-    p5 = frame_panel(img5, "5. Link into tracks")
+    p5 = frame_panel(img5, "Detections linked into tracks (100 frames)")
 
-    strip = hcat([p1, p2, p3, p4, p5])
+    strip = hcat([p1, p2, p3, p4])
     cv2.imwrite(f"{OUT}/pipeline_explained.png",
                 cv2.cvtColor(strip, cv2.COLOR_RGB2BGR))
+    # tracking is introduced in its own activity, so it gets its own figure
+    cv2.imwrite(f"{OUT}/tracking_explained.png",
+                cv2.cvtColor(p5, cv2.COLOR_RGB2BGR))
 
 
 def fig_stim_logic():
@@ -336,7 +345,181 @@ def fig_stim_logic():
                 cv2.cvtColor(hcat([p1, p2, p3]), cv2.COLOR_RGB2BGR))
 
 
+def colorize(gray, rgb):
+    """Map a grayscale image onto a single display color (pseudo-color)."""
+    g = gray.astype(np.float32) / 255.0
+    return (g[..., None] * np.asarray(rgb, np.float32)).astype(np.uint8)
+
+
+def fig_channel_gallery():
+    """Module A: each channel of the optogenetic sample, plus a composite.
+
+    Display colors are pseudo-colors chosen for contrast (miRFP blue,
+    mVenus green, mScarlet red), as is common practice in fluorescence
+    figures; they are unrelated to the emission wavelengths.
+    """
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
+                                warmup=False)
+
+    def snap(ch):
+        core.setConfig("Channel", ch)
+        core.snapImage()
+        return core.getImage()
+
+    phase = snap("phase-contrast")
+    nuc = snap("miRFP")
+    mem = snap("mVenus")
+    ktr = snap("mScarlet")
+
+    SIZE = 384
+
+    def small(img):
+        return cv2.resize(img, (SIZE, SIZE), interpolation=cv2.INTER_AREA)
+
+    comp = np.stack([small(ktr), small(mem), small(nuc)], axis=-1)  # RGB
+    comp = np.clip(comp.astype(np.float32) * 1.25, 0, 255).astype(np.uint8)
+
+    panels = [
+        frame_panel(np.stack([small(phase)] * 3, -1), "phase-contrast"),
+        frame_panel(colorize(small(nuc), (90, 90, 255)), "miRFP: H2B (nuclei)"),
+        frame_panel(colorize(small(mem), (80, 230, 80)),
+                    "mVenus: optoFGFR (membrane)"),
+        frame_panel(colorize(small(ktr), (255, 80, 80)),
+                    "mScarlet: ERK-KTR (activity)"),
+        frame_panel(comp, "composite"),
+    ]
+    cv2.imwrite(f"{OUT}/channel_gallery.png",
+                cv2.cvtColor(hcat(panels), cv2.COLOR_RGB2BGR))
+
+
+def fig_photoactivation():
+    """Module B activity 1: image -> mask -> stimulate -> image.
+
+    ERK-KTR before, the projected light, the response 5 s later, and the
+    reversal 20 s after that. Matches the activity script (seed 0)."""
+    from vmteach import measure_activity
+
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
+                                warmup=False)
+
+    def snap(ch):
+        core.setConfig("Channel", ch)
+        core.snapImage()
+        return core.getImage()
+
+    cells = detect_nuclei(snap("miRFP"))
+    ktr0 = snap("mScarlet")
+    n0 = sum(a > 0.5 for a in measure_activity(ktr0, cells))
+
+    mask = np.zeros((512, 512), np.uint8)
+    targets = [(x, y) for x, y in cells if x < 256]
+    for x, y in targets:
+        cv2.circle(mask, (x, y), 25, 255, -1)
+    core.setSLMImage("SLM", mask)
+    proj = snap("CyanStim")
+    advance(sim, 5)
+
+    cells1 = detect_nuclei(snap("miRFP"))
+    ktr1 = snap("mScarlet")
+    act1 = measure_activity(ktr1, cells1)
+    n1 = sum(a > 0.5 for a in act1)
+
+    core.setSLMImage("SLM", np.zeros((512, 512), np.uint8))
+    advance(sim, 20)
+    cells2 = detect_nuclei(snap("miRFP"))
+    ktr2 = snap("mScarlet")
+    n2 = sum(a > 0.5 for a in measure_activity(ktr2, cells2))
+
+    def ktr_rgb(img):
+        return np.stack([img] * 3, axis=-1)
+
+    proj_rgb = np.stack([np.zeros_like(proj), proj, proj], -1)  # cyan
+
+    after = ktr_rgb(ktr1)
+    for (x, y), a in zip(cells1, act1):
+        color = (0, 220, 220) if a > 0.5 else (120, 120, 120)
+        cv2.circle(after, (x, y), 16, color, 2, cv2.LINE_AA)
+
+    panels = [
+        frame_panel(ktr_rgb(ktr0), f"ERK-KTR before: {n0}/{len(cells)} active"),
+        frame_panel(proj_rgb, "projected light (CyanStim)"),
+        frame_panel(after, f"5 s after the pulse: {n1}/{len(cells1)} active"),
+        frame_panel(ktr_rgb(ktr2), f"20 s later: {n2}/{len(cells2)} active"),
+    ]
+    cv2.imwrite(f"{OUT}/photoactivation_expected.png",
+                cv2.cvtColor(hcat(panels), cv2.COLOR_RGB2BGR))
+
+
+def fig_keep_active():
+    """Module B activity 1 extension: why a loop? One pulse decays; the
+    closed loop re-stimulates whenever activity drops and holds the state."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from vmteach import measure_activity
+
+    def targeted_mean(core, sim, closed_loop, seconds=60):
+        sim.reset()
+        t, mean_left, mean_right = [], [], []
+        pulsed = False
+        for i in range(seconds):
+            core.setConfig("Channel", "miRFP")
+            core.snapImage()
+            cells = detect_nuclei(core.getImage())
+            core.setConfig("Channel", "mScarlet")
+            core.snapImage()
+            act = measure_activity(core.getImage(), cells)
+            left = [a for (x, _), a in zip(cells, act) if x < 256]
+            right = [a for (x, _), a in zip(cells, act) if x >= 256]
+            t.append(i)
+            mean_left.append(np.mean(left) if left else 0.0)
+            mean_right.append(np.mean(right) if right else 0.0)
+
+            mask = np.zeros((512, 512), np.uint8)
+            if closed_loop:
+                # re-stimulate targeted cells whose activity has dropped
+                for (x, y), a in zip(cells, act):
+                    if x < 256 and a < 0.7:
+                        cv2.circle(mask, (x, y), 25, 255, -1)
+            elif not pulsed and i == 2:
+                for x, y in cells:
+                    if x < 256:
+                        cv2.circle(mask, (x, y), 25, 255, -1)
+                pulsed = True
+            if mask.any():
+                core.setSLMImage("SLM", mask)
+                core.setConfig("Channel", "CyanStim")   # deliver
+                core.setSLMImage("SLM", np.zeros((512, 512), np.uint8))
+            advance(sim, 1.0)
+        return t, mean_left, mean_right
+
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
+                                warmup=False)
+    t1, pulse_left, _ = targeted_mean(core, sim, closed_loop=False)
+    t2, loop_left, loop_right = targeted_mean(core, sim, closed_loop=True)
+
+    fig, ax = plt.subplots(figsize=(7.5, 3.2), dpi=150)
+    ax.plot(t2, loop_left, color="#1268b3", lw=2,
+            label="targeted cells, closed loop")
+    ax.plot(t1, pulse_left, color="#1268b3", lw=2, ls="--",
+            label="targeted cells, single pulse")
+    ax.plot(t2, loop_right, color="#888888", lw=2,
+            label="untargeted cells")
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("mean ERK activity")
+    ax.set_ylim(-0.05, 1.1)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(frameon=False, fontsize=9)
+    fig.tight_layout()
+    fig.savefig(f"{OUT}/keep_active_expected.png")
+    plt.close(fig)
+
+
 if __name__ == "__main__":
+    fig_channel_gallery()
+    fig_photoactivation()
+    fig_keep_active()
     fig_steering()
     fig_split()
     fig_letter()

@@ -67,7 +67,21 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
     global _VirtualMicroscopeCore
     if _VirtualMicroscopeCore is None:
         _VirtualMicroscopeCore = _make_core_class()
-    core = _VirtualMicroscopeCore()
+    # Always use the psygnal events backend, even when a Qt app is already
+    # running (pymmcore-plus would then pick Qt signals, which lack the
+    # psygnal API our setConfig workaround needs, and would make a core
+    # created after launch_gui behave differently from the usual
+    # core-first path).
+    import os
+    _prev = os.environ.get("PYMM_SIGNALS_BACKEND")
+    os.environ["PYMM_SIGNALS_BACKEND"] = "psygnal"
+    try:
+        core = _VirtualMicroscopeCore()
+    finally:
+        if _prev is None:
+            os.environ.pop("PYMM_SIGNALS_BACKEND", None)
+        else:
+            os.environ["PYMM_SIGNALS_BACKEND"] = _prev
     # devices, channels, per-objective pixel sizes and the startup state
     # (10x, phase-contrast, binning 1) all come from the config file, as
     # they would for real hardware
@@ -149,6 +163,10 @@ def _make_core_class():
             no-op moves.
             """
             if getattr(self._in_set_config, "active", False):
+                return super().setConfig(groupName, configName)
+            if not hasattr(self.events.propertyChanged, "paused"):
+                # non-psygnal events backend (load_microscope prevents
+                # this, but a manually built core may use Qt signals)
                 return super().setConfig(groupName, configName)
             with self._set_config_lock:
                 self._in_set_config.active = True
