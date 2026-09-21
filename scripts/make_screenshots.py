@@ -55,7 +55,7 @@ def shot_results():
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
     imgs, masks, cents, segs = [], [], [], []
     for _ in range(80):
-        core.setConfig("Channel", "DAPI")      # robust detection channel
+        core.setConfig("Channel", "miRFP")      # robust detection channel
         core.snapImage()
         cells = detect_nuclei(core.getImage())
         core.setConfig("Channel", "phase-contrast")

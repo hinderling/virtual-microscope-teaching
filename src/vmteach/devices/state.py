@@ -62,7 +62,7 @@ class FilterWheelDevice(GenericStateDevice):
             0: "Electra1(402/454)",
             1: "SCFP2(434/474)",
             2: "TagGFP2(483/506)",
-            3: "obeYFP(514/528)",
+            3: "mVenus(515/528)",
             4: "mRFP1-Q667(549/570)",
             5: "mScarlet3(569/582)",
             6: "miRFP670(642/670)",

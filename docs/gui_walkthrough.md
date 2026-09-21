@@ -20,7 +20,7 @@ The top rows are the **napari-micromanager** control toolbars, the same plugin u
 |---|---|---|
 | **Snap** (camera icon) | acquire one image into the `preview` layer | `core.snapImage()` |
 | **Live** (film icon) | continuous acquisition; the simulated cells crawl in real time | `core.startContinuousSequenceAcquisition()` |
-| **Channel** dropdown | phase-contrast / DAPI / membrane / **CyanStim** (images the projected SLM light; use it to verify the alignment between mask and sample) | `core.setConfig("Channel", ...)` |
+| **Channel** dropdown | phase-contrast / miRFP (H2B nuclei) / mVenus (optoFGFR) / mScarlet (ERK-KTR activity reporter) / **CyanStim** (images the projected SLM light; use it to verify the alignment between mask and sample) | `core.setConfig("Channel", ...)` |
 | **Objectives** dropdown | 4x / 10x / 20x / 40x / 60x; the image stays 512x512, the pixel size (`core.getPixelSizeUm()`) and field of view change | `core.setState("Objective", ...)` |
 | **Device Property Browser** > Camera > Binning | 1 / 2 / 4: the frame shrinks to 512/b and gets b^2 brighter, so lower the exposure | `core.setProperty("Camera", "Binning", 2)` |
 | **Stage Control** | move the XY stage across the two 2048 um wells (4 x 4 fields at 10x each; well B is at x = 2304 um). At 4x the well wall and rounded corners are in view | `core.setXYPosition(x, y)` |

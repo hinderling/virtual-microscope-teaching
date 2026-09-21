@@ -25,7 +25,7 @@ viewer = launch_gui(core)
 #  2. Press Live                      -> cells jiggle and crawl in real time
 #  3. Switch Objectives: 10x -> 40x   -> smaller field of view (same 512x512
 #                                        image, smaller pixels), same sample
-#  4. Change Channel: phase-contrast -> DAPI / membrane
+#  4. Change Channel: phase-contrast -> miRFP (nuclei) / mVenus (membrane)
 #  5. Change Exposure                 -> brighter / noisier image
 #  6. Camera > Binning (property browser): 1 / 2 / 4 -> smaller, brighter
 #                                        frame (lower the exposure to match)
@@ -34,11 +34,11 @@ viewer = launch_gui(core)
 # Now do EXACTLY the same things from code, and watch the GUI react:
 core.snapImage()                       # = pressing "Snap"  (preview updates!)
 core.setState("Objective", 3)          # = choosing "40x" in the dropdown
-core.setConfig("Channel", "DAPI")      # = choosing "DAPI" in the dropdown
+core.setConfig("Channel", "miRFP")     # = choosing "miRFP" in the dropdown
 core.setExposure(100.0)                # = typing 100 in the Exposure box
 core.snapImage()
 
-# The dropdowns in the GUI now show 40x / DAPI / 100 ms: the GUI is not
+# The dropdowns in the GUI now show 40x / miRFP / 100 ms: the GUI is not
 # "another program", it is a viewer onto the same core object your script
 # controls. On a real microscope this is identical: napari-micromanager
 # in front, your feedback script behind, one shared core.

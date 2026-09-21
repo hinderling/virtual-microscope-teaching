@@ -5,9 +5,9 @@ Usage:  .venv/bin/python scripts/make_module_figures.py [out_dir]
 Produces (deterministic — same seeds as the course activities):
     act2_steering_expected.png   before/after of the steer-all-up loop
     act2_split_expected.png      per-object decision: left up, right down
-    exercise_letter_expected.png letter assembly result (DAPI routing)
+    exercise_letter_expected.png letter assembly result (nuclei routing)
 
-Detection uses the DAPI/nuclei reference detector and Hungarian track
+Detection uses the miRFP/nuclei reference detector and Hungarian track
 linking from the package, so the figures show what robust course code
 produces. Runtime ~30 s.
 """
@@ -79,7 +79,7 @@ def draw_tracks(panel, rows, color_fn, thickness=2):
 
 
 def run_loop(core, sim, decide, n=100):
-    """Standard loop: detect nuclei on DAPI, build mask, advance.
+    """Standard loop: detect nuclei on miRFP (H2B), build mask, advance.
 
     Returns (per-frame detections, final phase image, first mask).
     """
@@ -87,7 +87,7 @@ def run_loop(core, sim, decide, n=100):
     detections = []
     first_mask = None
     for i in range(n):
-        core.setConfig("Channel", "DAPI")      # light off, acquire
+        core.setConfig("Channel", "miRFP")      # light off, acquire
         core.snapImage()
         cells = detect_nuclei(core.getImage())
         mask = decide(cells)
@@ -185,7 +185,7 @@ def fig_letter():
     sim.reset()
     panels = []
     for i in range(500):
-        core.setConfig("Channel", "DAPI")
+        core.setConfig("Channel", "miRFP")
         core.snapImage()
         cells = detect_nuclei(core.getImage())
         core.setSLMImage("SLM", build(cells))
@@ -223,7 +223,7 @@ def fig_pipeline():
 
     # ── capture everything at t = 0 ─────────────────────────────────────
     phase0 = snap("phase-contrast")
-    dapi0 = snap("DAPI")
+    dapi0 = snap("miRFP")
     _, binary0 = cv2.threshold(dapi0, 0, 255,
                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     cells0 = detect_nuclei(dapi0)
@@ -250,7 +250,7 @@ def fig_pipeline():
     #    the cells move by their own motility, no light involved) ────────
     det = []
     for _ in range(100):
-        det.append(detect_nuclei(snap("DAPI")))
+        det.append(detect_nuclei(snap("miRFP")))
         advance(sim, 1.0)
 
     SC = 3  # upscale factor for legibility
@@ -306,7 +306,7 @@ def fig_stim_logic():
     light imaged in the CyanStim channel (cyan = light)."""
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
                                 warmup=False)
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     core.snapImage()
     cells = detect_nuclei(core.getImage())
     mask = steer_mask(cells)

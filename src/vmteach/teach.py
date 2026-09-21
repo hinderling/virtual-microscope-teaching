@@ -241,8 +241,12 @@ def advance(sim, seconds: float = 1.0, dt: float = 0.05) -> None:
         sim.step(dt)
 
 
-def detect_nuclei(img: np.ndarray, min_area: int = 20) -> list:
-    """Reference detector: nuclei centroids from a DAPI image.
+def detect_nuclei(img: np.ndarray, min_area: int = 20,
+                  exclude_border: bool = True) -> list:
+    """Reference detector: nuclei centroids from a nuclear-marker image.
+
+    Snap the miRFP channel (H2B-miRFP labels the nuclei) and pass the
+    frame here.
 
     Nuclei are bright, compact, and, unlike cell bodies, never touch
     (cells collide before their nuclei can), so a plain Otsu threshold
@@ -250,19 +254,71 @@ def detect_nuclei(img: np.ndarray, min_area: int = 20) -> list:
     detection for feedback loops and tracking; write your own detector
     in the activities to understand what it does.
 
+    Nuclei cut off by the image border are dropped by default (standard
+    practice: a clipped object has a biased centroid, and intensity
+    measurements around it sample the background).
+
     Returns a list of ``(x, y)`` integer centroids.
     """
     _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL,
                                    cv2.CHAIN_APPROX_SIMPLE)
+    h, w = img.shape[:2]
     out = []
     for c in contours:
         if cv2.contourArea(c) < min_area:
             continue
+        if exclude_border:
+            x0, y0, bw, bh = cv2.boundingRect(c)
+            if x0 <= 0 or y0 <= 0 or x0 + bw >= w or y0 + bh >= h:
+                continue
         m = cv2.moments(c)
         if m["m00"] == 0:
             continue
         out.append((int(m["m10"] / m["m00"]), int(m["m01"] / m["m00"])))
+    return out
+
+
+def measure_activity(ktr_img: np.ndarray, centroids, radius: int = 5) -> list:
+    """Per-cell pathway activity from an ERK-KTR (mScarlet channel) image.
+
+    The kinase translocation reporter sits in the nucleus while the
+    pathway is inactive and moves to the cytoplasm when it is active, so
+    the *nuclear* KTR intensity encodes the state: bright nucleus =
+    inactive, dark nucleus = active. This function samples the mean
+    intensity in a small disc at each nucleus centroid (from
+    :func:`detect_nuclei` on the miRFP channel) and rescales it to an
+    activity estimate.
+
+    Args:
+        ktr_img: a frame from the mScarlet (ERK-KTR) channel.
+        centroids: iterable of ``(x, y)`` nucleus positions, e.g. from
+            :func:`detect_nuclei`.
+        radius: sampling disc radius in pixels (keep it smaller than a
+            nucleus so the disc never overlaps the cytoplasm).
+
+    Returns:
+        A list of floats in ``[0, 1]``, one per centroid: 0 = inactive
+        (reporter fully nuclear), 1 = active (reporter fully exported).
+        Threshold at 0.5 for a binary active/inactive call.
+    """
+    h, w = ktr_img.shape[:2]
+    yy, xx = np.mgrid[-radius:radius + 1, -radius:radius + 1]
+    disc = (xx ** 2 + yy ** 2) <= radius ** 2
+    # rendered nuclear levels: ~170 inactive, ~40 active (before optics);
+    # rescale between conservative bounds so noise and exposure wiggle
+    # do not push values outside [0, 1]
+    hi, lo = 150.0, 60.0
+    out = []
+    for x, y in centroids:
+        x, y = int(round(x)), int(round(y))
+        x0, x1 = max(0, x - radius), min(w, x + radius + 1)
+        y0, y1 = max(0, y - radius), min(h, y + radius + 1)
+        d = disc[(y0 - y + radius):(y1 - y + radius),
+                 (x0 - x + radius):(x1 - x + radius)]
+        patch = ktr_img[y0:y1, x0:x1]
+        nuc = float(patch[d].mean()) if d.any() else 0.0
+        out.append(float(np.clip((hi - nuc) / (hi - lo), 0.0, 1.0)))
     return out
 
 

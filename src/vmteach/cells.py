@@ -220,7 +220,20 @@ class CellBase:
 
 
 class OptogeneticCell(CellBase):
-    """A cell that protrudes toward, and migrates toward, projected light."""
+    """A cell that protrudes toward, and migrates toward, projected light.
+
+    Besides moving, a stimulated cell activates its signalling pathway:
+    ``activity`` rises from 0 to 1 within ``ACTIVITY_RISE`` seconds of a
+    stimulation pulse and, once the pulses stop, falls back to 0 over
+    ``ACTIVITY_DECAY`` further seconds (one pulse: fully active at 5 s,
+    fully inactive again at 20 s). The ERK-KTR channel renders this state
+    as nuclear-to-cytosolic translocation of the reporter, so a
+    stimulation response is visible in a single snapshot, without
+    timelapse imaging or tracking.
+    """
+
+    ACTIVITY_RISE = 5.0    # s from a pulse to full activity
+    ACTIVITY_DECAY = 15.0  # s from full activity back to 0 (after RISE)
 
     def __init__(self, *args, protrusion_gain: float = 0.05,
                  impulse: float = 24.0, **kwargs):
@@ -228,6 +241,16 @@ class OptogeneticCell(CellBase):
         self.protrusion_gain = protrusion_gain
         self.impulse = impulse
         self.is_stimulated = False
+        self.activity = 0.0
+        self._since_stim = np.inf   # s since the last stimulation pulse
+
+    def update_activity(self, dt: float) -> None:
+        """Advance the signalling state by ``dt`` seconds (deterministic)."""
+        self._since_stim += dt
+        if self._since_stim <= self.ACTIVITY_RISE:
+            self.activity = min(1.0, self.activity + dt / self.ACTIVITY_RISE)
+        else:
+            self.activity = max(0.0, self.activity - dt / self.ACTIVITY_DECAY)
 
     def stimulate(self, mask: np.ndarray, origin=(0.0, 0.0),
                   scale: float = 1.0) -> None:
@@ -264,6 +287,7 @@ class OptogeneticCell(CellBase):
             return
 
         self.is_stimulated = True
+        self._since_stim = 0.0      # pulse received: activity starts rising
         idx = np.where(inside)[0][hit]
 
         # protrusion of the illuminated vertices (in place: r is a view)

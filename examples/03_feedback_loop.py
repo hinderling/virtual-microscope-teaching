@@ -34,7 +34,7 @@ plt.title(f"{phase.shape} {phase.dtype}")
 # %%
 # ACQUIRE for analysis: the nuclei channel. Nuclei are bright on black and
 # never touch (cells collide first), so the simplest segmentation works.
-core.setConfig("Channel", "DAPI")
+core.setConfig("Channel", "miRFP")
 core.snapImage()
 img = core.getImage()
 
@@ -118,7 +118,7 @@ core.setConfig("Channel", "phase-contrast")
 
 # %%
 # CLOSE THE LOOP: acquire → analyze → decide → actuate → let time pass → repeat.
-# Note the light choreography each cycle: switching to DAPI for the
+# Note the light choreography each cycle: switching to miRFP for the
 # acquisition turns the stimulation light OFF; after uploading the new mask,
 # switching to CyanStim turns it back ON. Forget the switch and nothing
 # happens, which is a classic debugging moment at a real microscope.
@@ -130,7 +130,7 @@ history = []
 
 sim.reset()
 for i in range(n_cycles):
-    core.setConfig("Channel", "DAPI")           # light off, imaging channel
+    core.setConfig("Channel", "miRFP")           # light off, imaging channel
     core.snapImage()
     img = core.getImage()                       # acquire
     cells = detect_cells(img)                   # analyze
@@ -162,7 +162,7 @@ def build_split_mask(cells, offset_px=15, spot_radius=11, shape=(512, 512)):
 sim.reset()
 start = None
 for i in range(n_cycles):
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     core.snapImage()
     img = core.getImage()
     cells = detect_cells(img)

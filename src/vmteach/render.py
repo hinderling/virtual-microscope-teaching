@@ -11,8 +11,12 @@ Channels (mode):
     0  phase-contrast:  neutral gray background, slightly darker cell body,
                         bright halo at the edge, darker nucleus; the well
                         wall (plastic) is darker with a bright edge
-    1  DAPI:            nuclei bright on black (wall invisible)
-    2  membrane:        cell outline bright on black (wall invisible)
+    1  miRFP (H2B):     nuclei bright on black (wall invisible)
+    2  mVenus (optoFGFR): cell outline bright on black; the membrane-bound
+                        optogenetic tool looks like a membrane stain
+    4  mScarlet (ERK-KTR): kinase translocation reporter; inactive cells
+                        show a bright nucleus in a dim cytoplasm, active
+                        cells a dark nucleus in a bright cytoplasm
 
 Stimulated cells get a brighter halo in phase-contrast, so learners can see
 which cells received light.
@@ -69,6 +73,9 @@ class CellRenderer:
     WALL_EDGE_UM = 6.0                         # edge line width, world um
     WALL_BLUR_UM = 5.0                         # softness of the wall edge
     FLUO_BG, DAPI_NUCLEUS, MEMBRANE_RIM = 6, 170, 150
+    # ERK-KTR (mode 4): intensities interpolate with cell.activity
+    KTR_CYTO_LO, KTR_CYTO_HI = 45, 110      # cytoplasm: dim -> bright
+    KTR_NUC_LO, KTR_NUC_HI = 40, 170        # nucleus:  bright -> dark
     LINE_UM = 2.5                 # halo / membrane line width, in world um
 
     def __init__(self, wells, well_half: float, corner_radius: float):
@@ -118,7 +125,8 @@ class CellRenderer:
 
         Args:
             cells: the population (objects with ``center``, ``angles``, ``r``).
-            mode: channel (0 phase-contrast, 1 DAPI, 2 membrane).
+            mode: channel (0 phase-contrast, 1 miRFP/H2B nuclei,
+                2 mVenus/optoFGFR membrane, 4 mScarlet/ERK-KTR).
             origin: world position (px) of output pixel (0, 0).
             scale: output pixels per world px (magnification / binning).
             shape: output (height, width).
@@ -127,18 +135,32 @@ class CellRenderer:
         thick = max(1, int(round(self.LINE_UM * scale)))
         vis = list(self._visible(cells, origin, scale, shape))
 
-        if mode == 1:      # DAPI
+        if mode == 1:      # miRFP: H2B nuclei
             img = np.full((h, w), self.FLUO_BG, np.uint8)
             polys = [_smooth_polygon(p, c.angles, c.r, scale * 0.5) for c, p in vis]
             if polys:
                 cv2.fillPoly(img, polys, self.DAPI_NUCLEUS, lineType=cv2.LINE_AA)
             return img
-        if mode == 2:      # membrane
+        if mode == 2:      # mVenus: membrane-bound optoFGFR
             img = np.full((h, w), self.FLUO_BG, np.uint8)
             polys = [_smooth_polygon(p, c.angles, c.r, scale) for c, p in vis]
             if polys:
                 cv2.polylines(img, polys, True, self.MEMBRANE_RIM, thick,
                               lineType=cv2.LINE_AA)
+            return img
+        if mode == 4:      # mScarlet: ERK-KTR translocation reporter
+            img = np.full((h, w), self.FLUO_BG, np.uint8)
+            # draw per cell: cytoplasm then nucleus, levels from activity
+            for c, p in vis:
+                a = float(getattr(c, "activity", 0.0))
+                cyto = int(round(self.KTR_CYTO_LO
+                                 + a * (self.KTR_CYTO_HI - self.KTR_CYTO_LO)))
+                nuc = int(round(self.KTR_NUC_HI
+                                - a * (self.KTR_NUC_HI - self.KTR_NUC_LO)))
+                body = _smooth_polygon(p, c.angles, c.r, scale)
+                nucleus = _smooth_polygon(p, c.angles, c.r, scale * 0.5)
+                cv2.fillPoly(img, [body], cyto, lineType=cv2.LINE_AA)
+                cv2.fillPoly(img, [nucleus], nuc, lineType=cv2.LINE_AA)
             return img
 
         # phase-contrast (mode 0)

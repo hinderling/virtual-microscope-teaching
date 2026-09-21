@@ -35,7 +35,7 @@ core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
 
 N_FRAMES = 30
 INTERVAL = 0.4          # seconds between frames
-DAPI = {"config": "DAPI", "group": "Channel"}
+NUCLEI = {"config": "miRFP", "group": "Channel"}   # H2B-miRFP
 STIM = {"config": "CyanStim", "group": "Channel"}
 
 
@@ -69,7 +69,7 @@ class Controller:
         t = event.index.get("t", 0)
         ch = event.channel.config if event.channel else None
 
-        if ch == "DAPI":
+        if ch == "miRFP":
             # Analysis frame: segment, then declare the whole stimulation
             # as ONE event. The event carries both the light path
             # (channel="CyanStim") and the pattern (slm_image=mask). The
@@ -90,7 +90,7 @@ class Controller:
             else:
                 self._queue.put(MDAEvent(
                     index={"t": t + 1},
-                    channel=DAPI,
+                    channel=NUCLEI,
                     min_start_time=(t + 1) * INTERVAL,  # pace by wall clock
                 ))
 
@@ -99,7 +99,7 @@ class Controller:
         # run_mda is non-blocking and returns the acquisition thread.
         self.thread = self._core.run_mda(iter(self._queue.get, self.STOP))
         # seed the acquisition with the first event; analysis takes over
-        self._queue.put(MDAEvent(index={"t": 0}, channel=DAPI,
+        self._queue.put(MDAEvent(index={"t": 0}, channel=NUCLEI,
                                  min_start_time=0.0))
 
 

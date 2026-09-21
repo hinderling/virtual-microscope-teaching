@@ -57,10 +57,11 @@ FIELD_UM = SENSOR_SIZE * OBJECTIVES["10x"]   # reference 10x field of view
 
 # (Filter Wheel label, LED label) -> render mode
 _MODE_MAP = {
-    ("Electra1(402/454)", "CYAN"): 0,      # phase-contrast
-    ("SCFP2(434/474)", "UV"): 1,           # DAPI
-    ("mScarlet3(569/582)", "ORANGE"): 2,   # membrane
-    ("TagGFP2(483/506)", "BLUE"): 3,       # CyanStim: projected SLM light
+    ("Electra1(402/454)", "CYAN"): 0,       # phase-contrast
+    ("miRFP670(642/670)", "RED"): 1,        # H2B: nuclei, far-red
+    ("mVenus(515/528)", "CYAN"): 2,         # optoFGFR: the tool, membrane-like
+    ("TagGFP2(483/506)", "BLUE"): 3,        # CyanStim: projected SLM light
+    ("mScarlet3(569/582)", "ORANGE"): 4,    # ERK-KTR: activity reporter
 }
 
 
@@ -126,6 +127,7 @@ class OptoCellSim:
             2: Optics(seed + 302, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
             # stimulation-light channel: strong halo, bright, noisy
             3: Optics(seed + 303, psf_sigma=1.6, read_std=3.0, photon_k=0.50),
+            4: Optics(seed + 304, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
         }
 
         self._seed = seed
@@ -259,6 +261,8 @@ class OptoCellSim:
         resolve_all_collisions(self.centers, self.velocities, self.radii,
                                self.cell_well, self.wells,
                                self.well_half, self.corner_radius)
+        for c in self._cells:
+            c.update_activity(dt)
 
     # ── stimulation ─────────────────────────────────────────────────────
 

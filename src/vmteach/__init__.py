@@ -26,6 +26,7 @@ from vmteach.teach import (
     overlay,
     letter_mask,
     detect_nuclei,
+    measure_activity,
     link_tracks,
 )
 
@@ -35,6 +36,7 @@ __all__ = [
     "overlay",
     "letter_mask",
     "detect_nuclei",
+    "measure_activity",
     "link_tracks",
 ]
 

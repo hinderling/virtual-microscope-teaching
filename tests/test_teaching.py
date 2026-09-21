@@ -66,7 +66,7 @@ def test_device_surface(scope):
     """The devices the course activities rely on must exist."""
     core, sim = scope
     assert set(core.getAvailableConfigs("Channel")) == {
-        "phase-contrast", "DAPI", "membrane", "CyanStim"}
+        "phase-contrast", "miRFP", "mVenus", "mScarlet", "CyanStim"}
     assert core.getStateLabels("Objective") == ("4x", "10x", "20x", "40x", "60x")
     assert "SLM" in core.getLoadedDevices()
     core.setXYPosition(10.0, 20.0)  # stage moves without error
@@ -99,7 +99,7 @@ def test_feedback_loop_steers_cells(scope):
         y_prev = sim.centers[:, 1].copy()
         total_dy = np.zeros(len(y_prev))
         for _ in range(n):
-            core.setConfig("Channel", "DAPI")             # light OFF, acquire
+            core.setConfig("Channel", "miRFP")             # light OFF, acquire
             core.snapImage()
             img = core.getImage()
             cells = detect_cells(img, min_area=20)
@@ -222,7 +222,7 @@ def test_event_driven_mda_queue():
         t = event.index.get("t", 0)
         ch = event.channel.config if event.channel else None
         frames.append((t, ch))
-        if ch == "DAPI":
+        if ch == "miRFP":
             cells = detect_cells(img, min_area=20)
             # stimulation = one declared event carrying the light path AND
             # the pattern; no manual setSLMImage or setConfig needed
@@ -233,13 +233,13 @@ def test_event_driven_mda_queue():
             q.put(STOP)
         else:
             q.put(MDAEvent(index={"t": t + 1},
-                           channel={"config": "DAPI", "group": "Channel"},
+                           channel={"config": "miRFP", "group": "Channel"},
                            min_start_time=(t + 1) * 0.2))
 
     core.mda.events.frameReady.connect(on_frame)
     core.run_mda(iter(q.get, STOP))
     q.put(MDAEvent(index={"t": 0},
-                   channel={"config": "DAPI", "group": "Channel"}))
+                   channel={"config": "miRFP", "group": "Channel"}))
     deadline = time.time() + 15
     while core.mda.is_running() and time.time() < deadline:
         time.sleep(0.05)
@@ -248,8 +248,8 @@ def test_event_driven_mda_queue():
     if GLOBAL_BRIDGE is not None and GLOBAL_BRIDGE._engine is not None:
         GLOBAL_BRIDGE._engine.stop()
     assert not core.mda.is_running(), "MDA did not finish"
-    expected = [(0, "DAPI"), (0, "CyanStim"), (1, "DAPI"), (1, "CyanStim"),
-                (2, "DAPI"), (2, "CyanStim")]
+    expected = [(0, "miRFP"), (0, "CyanStim"), (1, "miRFP"), (1, "CyanStim"),
+                (2, "miRFP"), (2, "CyanStim")]
     assert frames == expected, f"frames received: {frames}"
 
 
@@ -277,7 +277,7 @@ def test_well_wall_visible_in_phase_only(scope):
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
     ph = core.getImage()
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     core.snapImage()
     fl = core.getImage()
     core.setXYPosition(0.0, 0.0)
@@ -309,7 +309,7 @@ def test_objective_changes_pixel_size_not_image_size(scope):
 
 def test_binning_presets_shrink_and_brighten(scope):
     core, sim = scope
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     core.setExposure(5.0)                     # keep 4x4 out of saturation
     assert tuple(core.getAllowedPropertyValues("Camera", "Binning")) == ("1", "2", "4")
     means = {}
@@ -348,10 +348,12 @@ def test_slm_follows_objective_magnification(scope):
     core, sim = scope
     sim.reset()
     core.setStateLabel("Objective", "40x")
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     core.snapImage()
     from vmteach import detect_nuclei
-    nuclei = detect_nuclei(core.getImage())
+    # keep border-clipped nuclei: at 40x most of the few visible nuclei
+    # touch the frame edge, and a clipped centroid still lands on the cell
+    nuclei = detect_nuclei(core.getImage(), exclude_border=False)
     assert nuclei, "no nuclei in the 40x field"
     cx, cy = nuclei[0]
     r_px = 20 / core.getPixelSizeUm()               # ~cell radius in px
@@ -374,7 +376,7 @@ def test_multi_position_fields_are_distinct(scope):
     core, sim = scope
     sim.reset()
     assert sim.well_size >= 2048 and sim.cells_per_well >= 16 * 10
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     seen = []
     wx, wy = sim.well_positions[1]                 # second well
     for x, y in [(0, 0), (512, 0), (0, 512), (-512, -512), (wx, wy)]:
@@ -415,7 +417,7 @@ def test_property_change_listener_may_call_setconfig(scope):
     done = threading.Event()
 
     def worker():
-        core.setProperty("Filter Wheel", "Label", "obeYFP(514/528)")
+        core.setProperty("Filter Wheel", "Label", "mVenus(515/528)")
         done.set()
 
     t = threading.Thread(target=worker, daemon=True)
@@ -455,3 +457,46 @@ def test_mda_summary_metadata_builds(scope):
     info = meta["image_infos"][0]
     assert info["pixel_size_um"] == pytest.approx(1.0)
     assert info["pixel_size_config_name"] == "Res10x"
+
+
+def test_ktr_reporter_shows_activation_and_reverses(scope):
+    """The ERK-KTR channel (mScarlet) makes one stimulation pulse visible in
+    a single snapshot: targeted cells flip to active (dark nucleus) within
+    5 s and reverse within 20 s. No timelapse, no tracking."""
+    import numpy as np
+
+    from vmteach import advance, detect_nuclei, measure_activity
+
+    core, sim = scope
+    sim.reset()
+
+    def snap(ch):
+        core.setConfig("Channel", ch)
+        core.snapImage()
+        return core.getImage()
+
+    cells = detect_nuclei(snap("miRFP"))
+    assert len(cells) >= 5
+    before = measure_activity(snap("mScarlet"), cells)
+    assert all(a < 0.2 for a in before), before
+
+    # stimulate only the left half of the field
+    mask = np.zeros((512, 512), np.uint8)
+    mask[:, :256] = 255
+    core.setSLMImage(mask)
+    snap("CyanStim")                    # gated delivery of one pulse
+    core.setSLMImage(np.zeros((512, 512), np.uint8))
+    advance(sim, 5)                     # rise time
+
+    cells1 = detect_nuclei(snap("miRFP"))
+    act = measure_activity(snap("mScarlet"), cells1)
+    left = [a for (x, _), a in zip(cells1, act) if x < 236]
+    right = [a for (x, _), a in zip(cells1, act) if x >= 276]
+    assert left and all(a > 0.8 for a in left), left
+    assert right and all(a < 0.2 for a in right), right
+
+    advance(sim, 20)                    # full reversal
+    cells2 = detect_nuclei(snap("miRFP"))
+    after = measure_activity(snap("mScarlet"), cells2)
+    assert all(a < 0.2 for a in after), after
+    core.setConfig("Channel", "phase-contrast")

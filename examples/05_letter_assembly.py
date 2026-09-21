@@ -24,7 +24,7 @@ deep = (dist_in >= DEEP).astype(np.uint8) * 255
 deep_pts_all = np.column_stack(np.nonzero(deep)[::-1])
 
 
-# Detect NUCLEI in the DAPI channel: nuclei never touch (cells collide
+# Detect NUCLEI in the miRFP (H2B) channel: nuclei never touch (cells collide
 # first), so simple thresholding stays reliable even when cells crowd the
 # letter. This is the same reason real workflows segment nuclei, not cell
 # bodies.
@@ -73,14 +73,14 @@ def build_letter_mask(cells, step_px=12, spot_r=11, occupied_r=28,
 # Run the feedback loop (~15 s for 500 cycles)
 sim.reset()
 for i in range(500):
-    core.setConfig("Channel", "DAPI")        # light off, acquire nuclei
+    core.setConfig("Channel", "miRFP")        # light off, acquire nuclei
     core.snapImage()
     cells = detect_cells(core.getImage())
     core.setSLMImage("SLM", build_letter_mask(cells))
     core.setConfig("Channel", "CyanStim")    # light on: deliver the pattern
     advance(sim, seconds=1.0)
 
-core.setConfig("Channel", "membrane")        # cell outlines for the metric
+core.setConfig("Channel", "mVenus")        # cell outlines for the metric
 core.snapImage()
 outlines = core.getImage()
 core.setConfig("Channel", "phase-contrast")  # final image for display

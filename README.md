@@ -38,7 +38,7 @@ core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
 
 for cycle in range(100):
     # ACQUIRE the nuclei channel: identical calls on real hardware
-    core.setConfig("Channel", "DAPI")
+    core.setConfig("Channel", "miRFP")
     core.snapImage()
     img = core.getImage()
 
@@ -81,7 +81,17 @@ The cell population migrates upward, steered by your loop. Snap the `phase-contr
 | `overlay(img, mask)` | RGB visualization of a stimulation mask on an image |
 | `letter_mask(char)` | Binary letter target for the assembly exercise |
 
-`core` is a full `pymmcore-plus` core: stage (`setXYPosition`), objectives (`setState("Objective", ...)`), four channels (phase-contrast, DAPI, membrane, and **CyanStim**, which images the projected SLM light itself, for verifying mask–sample alignment like on a real system), exposure, binning, SLM. Explore them with the GUI below.
+`core` is a full `pymmcore-plus` core: stage (`setXYPosition`), objectives (`setState("Objective", ...)`), five channels, exposure, binning, SLM. Channels are named after the fluorophore, as on a real system:
+
+| Channel | Labels | What you see |
+|---|---|---|
+| `phase-contrast` | — | overview, all cells |
+| `miRFP` | H2B (nuclei) | bright nuclei on black: the detection channel |
+| `mVenus` | optoFGFR | the membrane-bound optogenetic tool |
+| `mScarlet` | ERK-KTR | activity reporter: bright nucleus = resting, dark nucleus = activated (full response ~5 s after a pulse, reversal ~20 s) |
+| `CyanStim` | — | the blue stimulation light path; snapping it delivers the pulse and images the projected pattern |
+
+Explore them with the GUI below.
 
 ## Microscope geometry
 
