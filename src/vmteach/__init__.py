@@ -22,6 +22,8 @@ https://github.com/hinderling/virtual-microscope
 
 from vmteach.teach import (
     load_microscope,
+    register_backend,
+    BACKENDS,
     advance,
     overlay,
     letter_mask,
@@ -32,6 +34,8 @@ from vmteach.teach import (
 
 __all__ = [
     "load_microscope",
+    "register_backend",
+    "BACKENDS",
     "advance",
     "overlay",
     "letter_mask",

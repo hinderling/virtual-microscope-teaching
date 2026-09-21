@@ -24,16 +24,44 @@ import cv2
 import numpy as np
 
 
+def _make_opto_sim(**kwargs):
+    from vmteach.sim import OptoCellSim
+    return OptoCellSim(**kwargs)
+
+
+#: Registry of simulated samples ("backends"). A backend is a factory that
+#: returns a sim object implementing the bridge contract: ``snap_frame()``,
+#: ``step(dt)``, ``reset(seed)``, ``set_focal_plane(z)``, the device-facing
+#: attributes used by :mod:`vmteach.bridge` (``state_devices``, ``stage``,
+#: ``sensor_size``, ...) and, for realtime mode, ``continuous = True``.
+#: Register your own with :func:`register_backend`.
+BACKENDS: dict = {"optogenetic": _make_opto_sim}
+
+
+def register_backend(name: str, factory) -> None:
+    """Add a simulated sample so ``load_microscope(name)`` can create it.
+
+    ``factory(**kwargs)`` must return a sim object satisfying the bridge
+    contract (see :data:`BACKENDS`). The ``optogenetic`` backend's
+    :class:`vmteach.sim.OptoCellSim` is the reference implementation.
+    """
+    BACKENDS[str(name)] = factory
+
+
 def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
                     seed: int = 0, mode: str = "stepped", warmup: bool = True,
                     **kwargs):
     """Create a virtual microscope and return ``(core, sim)``.
 
     Args:
-        backend: Only ``"optogenetic"`` exists in this teaching package.
+        backend: Which simulated sample to load, by registry name (see
+            :data:`BACKENDS` and :func:`register_backend`). This package
+            ships ``"optogenetic"``: light-responsive cells with a nuclear
+            marker, a membrane-bound optogenetic receptor, and an ERK-KTR
+            activity reporter.
         n_cells: Cell density, as cells per 10x field of view (512 x 512
-            um). The world is 2048 x 2048 um by default (4 x 4 fields), so
-            the total population is 16x this number.
+            um). Each 2048 um well holds 16 fields, so the default
+            population is 16x this number per well.
         seed: Random seed. Same seed, same experiment, on every machine.
         mode: ``"stepped"`` (default): simulated time advances only via
             :func:`advance`; fully deterministic.
@@ -41,26 +69,25 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
             your code runs, like on a real microscope.
         warmup: Pre-compile the physics (numba, cached on disk after the
             first ever run) so the first snap in the exercise is instant.
-        **kwargs: Forwarded to :class:`vmteach.sim.OptoCellSim`
-            (``base_radius``, ``world_size``, ...).
+        **kwargs: Forwarded to the backend factory (for ``optogenetic``:
+            ``base_radius``, ``well_size``, ``n_wells``, ...).
 
     Returns:
         core: ``UniMMCore``, the microscope control object. The identical
             pymmcore API controls real Micro-Manager hardware.
         sim: The simulation handle (for :func:`advance` and ``.reset()``).
     """
-    if backend != "optogenetic":
+    if backend not in BACKENDS:
         raise ValueError(
-            f"backend {backend!r} not available: this teaching package "
-            "ships only 'optogenetic' (see the full virtual-microscope "
-            "repo for more)")
+            f"backend {backend!r} not available; registered backends: "
+            f"{sorted(BACKENDS)}. Add your own with "
+            "vmteach.register_backend(name, factory).")
     if mode not in ("stepped", "realtime"):
         raise ValueError(f"mode must be 'stepped' or 'realtime', got {mode!r}")
 
     from vmteach.bridge import SimulationBridge, set_global_bridge
-    from vmteach.sim import OptoCellSim
 
-    sim = OptoCellSim(n_cells=n_cells, seed=seed, **kwargs)
+    sim = BACKENDS[backend](n_cells=n_cells, seed=seed, **kwargs)
     bridge = SimulationBridge(sim)
     set_global_bridge(bridge)
 

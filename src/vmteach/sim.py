@@ -72,7 +72,7 @@ class OptoCellSim:
     world_pixel_size_um = 1.0
 
     def __init__(self, n_cells: int = 20, well_size: float = 2048.0,
-                 n_wells: int = 2, well_gap: float = 256.0,
+                 n_wells: int | tuple[int, int] = 2, well_gap: float = 256.0,
                  corner_radius: float = 256.0, base_radius: float = 20.0,
                  seed: int = 0, sensor_size: int = SENSOR_SIZE):
         """
@@ -81,7 +81,8 @@ class OptoCellSim:
                 (512 x 512 um). Each well holds ``n_cells * (well area /
                 field area)`` cells, so every field looks the same.
             well_size: side of each (rounded) square well, um.
-            n_wells: wells side by side along x.
+            n_wells: wells side by side along x, or a ``(nx, ny)`` grid
+                (e.g. ``(2, 2)`` for a 4-well plate layout).
             well_gap: plastic between neighbouring wells, um.
             corner_radius: rounding of the well corners, um.
             base_radius: mean cell radius, um.
@@ -92,18 +93,24 @@ class OptoCellSim:
         self.well_half = self.well_size / 2.0
         self.well_gap = float(well_gap)
         self.corner_radius = float(corner_radius)
-        self.n_wells = int(n_wells)
+        nx, ny = (n_wells, 1) if isinstance(n_wells, int) else map(int, n_wells)
+        self.wells_nx, self.wells_ny = int(nx), int(ny)
+        self.n_wells = self.wells_nx * self.wells_ny
         self.base_radius = float(base_radius)
         self.sensor_size = int(sensor_size)
         pitch = self.well_size + self.well_gap
-        # world coordinates (um): well centres along x, margin all round
+        # world coordinates (um): well centres on a grid, margin all round.
+        # Row-major order (left to right, then next row), so well 0 is the
+        # top-left one and the single-row case matches the old layout.
         margin = self.well_size / 4.0
-        self.wells = np.array([[margin + self.well_half + i * pitch,
-                                margin + self.well_half]
-                               for i in range(self.n_wells)])
-        self.width = 2 * margin + self.n_wells * self.well_size \
-            + (self.n_wells - 1) * self.well_gap
-        self.height = 2 * margin + self.well_size
+        self.wells = np.array([[margin + self.well_half + ix * pitch,
+                                margin + self.well_half + iy * pitch]
+                               for iy in range(self.wells_ny)
+                               for ix in range(self.wells_nx)])
+        self.width = 2 * margin + self.wells_nx * self.well_size \
+            + (self.wells_nx - 1) * self.well_gap
+        self.height = 2 * margin + self.wells_ny * self.well_size \
+            + (self.wells_ny - 1) * self.well_gap
         fields = (self.well_size / FIELD_UM) ** 2
         self.cells_per_field = n_cells
         self.cells_per_well = max(1, int(round(n_cells * fields)))
@@ -168,10 +175,11 @@ class OptoCellSim:
         """Stage travel range ((x_min, x_max), (y_min, y_max)) in um, so the
         camera cannot leave the wells: (-1016, 3320) x (-1000, 1000) for the
         default two-well slide."""
-        x_last = float(self.wells[-1, 0] - self.wells[0, 0])
+        x_last = float(self.wells[:, 0].max() - self.wells[0, 0])
+        y_last = float(self.wells[:, 1].max() - self.wells[0, 1])
         rx = self.well_half - self.STAGE_INSET_X
         ry = self.well_half - self.STAGE_INSET_Y
-        return ((-rx, x_last + rx), (-ry, ry))
+        return ((-rx, x_last + rx), (-ry, y_last + ry))
 
     def clamp_stage(self, x: float, y: float) -> tuple[float, float]:
         """Clamp a requested stage position to the travel range."""

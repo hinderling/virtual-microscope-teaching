@@ -500,3 +500,21 @@ def test_ktr_reporter_shows_activation_and_reverses(scope):
     after = measure_activity(snap("mScarlet"), cells2)
     assert all(a < 0.2 for a in after), after
     core.setConfig("Channel", "phase-contrast")
+
+
+def test_well_grid_layouts():
+    """n_wells accepts an (nx, ny) grid; geometry and limits follow."""
+    from vmteach.sim import OptoCellSim
+
+    sim = OptoCellSim(n_cells=2, n_wells=(2, 2), seed=0)
+    assert sim.n_wells == 4 and len(sim.wells) == 4
+    assert sim.width == sim.height              # square 2x2 plate
+    (x0, x1), (y0, y1) = sim.stage_limits
+    assert y1 > sim.well_size                   # travel reaches the second row
+    # row-major: well 1 right of well 0, well 2 below well 0
+    assert sim.wells[1, 0] > sim.wells[0, 0]
+    assert sim.wells[1, 1] == sim.wells[0, 1]
+    assert sim.wells[2, 1] > sim.wells[0, 1]
+
+    row = OptoCellSim(n_cells=2, n_wells=2, seed=0)   # old int form
+    assert row.n_wells == 2 and row.height < row.width
