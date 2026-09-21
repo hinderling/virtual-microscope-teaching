@@ -155,29 +155,6 @@ def _make_core_class():
             factor = binning / self.getMagnificationFactor()
             return tuple(v * factor for v in self.getPixelSizeAffineByID(res))
 
-        def setProperty(self, label, propName, propValue) -> None:
-            """Route Core role properties to their dedicated setters.
-
-            ``UniMMCore.setProperty`` (<= 0.18.1) forwards ``Core`` properties
-            straight to the C++ core, which rejects Python device labels
-            ("Cannot set Core property Focus to invalid value"). The GUI
-            stage/camera widgets set roles this way. Fixed on pymmcore-plus
-            main (unreleased); drop this once that release is out.
-            """
-            if str(label) == "Core":
-                setter = {
-                    "ChannelGroup": self.setChannelGroup,
-                    "Focus": self.setFocusDevice,
-                    "Camera": self.setCameraDevice,
-                    "XYStage": self.setXYStageDevice,
-                    "Shutter": self.setShutterDevice,
-                    "SLM": self.setSLMDevice,
-                }.get(str(propName))
-                if setter is not None:
-                    setter(str(propValue))
-                    return
-            super().setProperty(label, propName, propValue)
-
         def setShutterOpen(self, *args) -> None:
             """Resolve the current shutter through the Python device registry.
 

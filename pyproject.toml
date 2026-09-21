@@ -15,7 +15,11 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    "pymmcore-plus>=0.17.0",
+    # git main: 0.18.1 breaks the GUI stage/camera widgets on UniMMCore
+    # (setProperty('Core', 'Focus', <py device>) is rejected; fixed on main,
+    # unreleased). Switch back to "pymmcore-plus>=0.18.2" once released;
+    # PyPI does not accept git dependencies.
+    "pymmcore-plus @ git+https://github.com/pymmcore-plus/pymmcore-plus@main",
     "numpy>=1.23",
     "scipy>=1.9",
     "opencv-python-headless>=4.6",
@@ -37,6 +41,10 @@ Homepage = "https://github.com/hinderling/virtual-microscope-teaching"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# Needed for the temporary git dependency above; remove together with it.
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vmteach"]
