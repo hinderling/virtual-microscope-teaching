@@ -7,7 +7,6 @@ Produces (deterministic — same seeds as the course activities):
     photoactivation_expected.png KTR before / projected light / after / reversal
     keep_active_expected.png     activity curves: one pulse vs closed loop
     pipeline_explained.png       4-step image analysis on a 3-cell crop
-    tracking_explained.png       linked tracks on the same crop
     act2_steering_expected.png   before/after of the steer-all-up loop
     act2_split_expected.png      per-object decision: left up, right down
     exercise_letter_expected.png letter assembly result (nuclei routing)
@@ -139,21 +138,35 @@ def fig_split():
             cv2.circle(mask, (cx, int(np.clip(cy + dy, 0, 511))), 11, 255, -1)
         return mask
 
-    det, img_final, _ = run_loop(core, sim, decide)
-    panel = overlay(img_final, np.zeros_like(img_final))
+    def midline(panel):
+        for y in range(0, 512, 14):            # dashed midline
+            cv2.line(panel, (256, y), (256, min(y + 7, 511)), BLACK, 1)
+
+    det, img_final, mask0 = run_loop(core, sim, decide)
+
+    # panel 1: first frame with the mask (same layout as the steering figure)
+    sim.reset()
+    core.setConfig("Channel", "phase-contrast")
+    core.snapImage()
+    img1 = overlay(core.getImage(), mask0)
+    midline(img1)
+    p1 = frame_panel(img1, "Cycle 1: computed stimulation mask (blue)")
+
+    # panel 2: final frame with linked tracks; green = steered up (as in
+    # the steering figure), dark purple = steered down
+    img2 = overlay(img_final, np.zeros_like(img_final))
     rows = link_tracks(det)
 
     def color(tr):
         x0 = tr[np.argmin(tr[:, 1]), 3]        # starting x decides the group
-        return (30, 80, 200) if x0 < 256 else (200, 60, 30)
+        return (30, 110, 30) if x0 < 256 else (110, 40, 140)
 
-    draw_tracks(panel, rows, color)
-    for y in range(0, 512, 14):                # dashed midline
-        cv2.line(panel, (256, y), (256, min(y + 7, 511)), BLACK, 1)
-    out = frame_panel(panel,
-                      "Cycle 100: blue tracks steered up, red steered down")
+    draw_tracks(img2, rows, color)
+    midline(img2)
+    p2 = frame_panel(img2,
+                     "Cycle 100: green tracks steered up, purple down")
     cv2.imwrite(f"{OUT}/act2_split_expected.png",
-                cv2.cvtColor(out, cv2.COLOR_RGB2BGR))
+                cv2.cvtColor(hcat([p1, p2]), cv2.COLOR_RGB2BGR))
 
 
 def fig_letter():
@@ -252,13 +265,6 @@ def fig_pipeline():
     # the window with 3 well-centered nuclei and the fewest neighbours
     _, cx0, cy0 = min(candidates)
 
-    # ── unstimulated time-lapse to accumulate tracks (pure analysis:
-    #    the cells move by their own motility, no light involved) ────────
-    det = []
-    for _ in range(100):
-        det.append(detect_nuclei(snap("miRFP")))
-        advance(sim, 1.0)
-
     SC = 3  # upscale factor for legibility
 
     def crop(img):
@@ -288,25 +294,9 @@ def fig_pipeline():
                            cv2.MARKER_CROSS, 18, 2)
     p4 = frame_panel(img4, "4. Label and measure centroids")
 
-    # panel 5: tracks from the time-lapse, over the t=0 image
-    img5 = to_rgb(crop(phase0))
-    rows = link_tracks(det)
-    for tid in np.unique(rows[:, 0]):
-        tr = rows[rows[:, 0] == tid]
-        if len(tr) < 5:
-            continue
-        pts = tr[np.argsort(tr[:, 1])][:, 2:]
-        poly = np.column_stack([(pts[:, 1] - cx0) * SC,
-                                (pts[:, 0] - cy0) * SC]).astype(np.int32)
-        cv2.polylines(img5, [poly], False, (30, 110, 30), 3, cv2.LINE_AA)
-    p5 = frame_panel(img5, "Detections linked into tracks (100 frames)")
-
     strip = hcat([p1, p2, p3, p4])
     cv2.imwrite(f"{OUT}/pipeline_explained.png",
                 cv2.cvtColor(strip, cv2.COLOR_RGB2BGR))
-    # tracking is introduced in its own activity, so it gets its own figure
-    cv2.imwrite(f"{OUT}/tracking_explained.png",
-                cv2.cvtColor(p5, cv2.COLOR_RGB2BGR))
 
 
 def fig_stim_logic():
