@@ -435,15 +435,11 @@ def fig_photoactivation():
 
     proj_rgb = np.stack([np.zeros_like(proj), proj, proj], -1)  # cyan
 
-    after = ktr_rgb(ktr1)
-    for (x, y), a in zip(cells1, act1):
-        color = (0, 220, 220) if a > 0.5 else (120, 120, 120)
-        cv2.circle(after, (x, y), 16, color, 2, cv2.LINE_AA)
-
     panels = [
         frame_panel(ktr_rgb(ktr0), f"ERK-KTR before: {n0}/{len(cells)} active"),
         frame_panel(proj_rgb, "projected light (CyanStim)"),
-        frame_panel(after, f"5 s after the pulse: {n1}/{len(cells1)} active"),
+        frame_panel(ktr_rgb(ktr1),
+                    f"5 s after the pulse: {n1}/{len(cells1)} active"),
         frame_panel(ktr_rgb(ktr2), f"20 s later: {n2}/{len(cells2)} active"),
     ]
     cv2.imwrite(f"{OUT}/photoactivation_expected.png",
