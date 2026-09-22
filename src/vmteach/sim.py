@@ -39,6 +39,7 @@ import numpy as np
 
 from vmteach.cells import (
     OptogeneticCell,
+    conform_membranes,
     resolve_all_collisions,
     update_all_cells_parallel,
     well_sdf,
@@ -247,6 +248,9 @@ class OptoCellSim:
         self.polarities = np.zeros(n)
         self.motions = np.zeros((n, 2))
         self.drives = np.zeros(n)
+        n_fronts = len(self._cells[0].front_ttl)
+        self.front_angs = np.zeros((n, n_fronts))
+        self.front_ttls = np.zeros((n, n_fronts))
         self.base_radii = np.zeros(n)
         self.areas = np.zeros(n)
         self.angles = np.linspace(0, 2 * np.pi, 24, endpoint=False)
@@ -258,6 +262,8 @@ class OptoCellSim:
             self.adhesions[i] = c.adhesion
             self.polarities[i] = c.polarity[0]
             self.motions[i] = c.motion
+            self.front_angs[i] = c.front_ang
+            self.front_ttls[i] = c.front_ttl
             self.base_radii[i] = c.base_r
             self.areas[i] = c.area0
             c.center = self.centers[i]
@@ -267,6 +273,8 @@ class OptoCellSim:
             c.adhesion = self.adhesions[i]
             c.polarity = self.polarities[i:i + 1]
             c.motion = self.motions[i]
+            c.front_ang = self.front_angs[i]
+            c.front_ttl = self.front_ttls[i]
             c.angles = self.angles
 
     # ── physics ─────────────────────────────────────────────────────────
@@ -275,11 +283,16 @@ class OptoCellSim:
         """Advance all cells by *dt* (deterministic given _step_count)."""
         update_all_cells_parallel(
             self.centers, self.velocities, self.radii, self.rest_radii,
-            self.adhesions, self.polarities, self.motions, self.angles,
-            self.base_radii, self.areas, self.drives, self.cell_well,
-            self.wells, self.well_half, self.corner_radius, dt,
-            step_count=self._step_count)
+            self.adhesions, self.polarities, self.motions, self.front_angs,
+            self.front_ttls, self.angles, self.base_radii, self.areas,
+            self.drives, self.cell_well, self.wells, self.well_half,
+            self.corner_radius, dt, step_count=self._step_count)
         self._step_count += 1
+        # membranes press against neighbours and conform (contact
+        # inhibition of protrusion); bodies must still never merge
+        snapshot = self.radii.copy()
+        conform_membranes(self.centers, snapshot, self.radii,
+                          self.base_radii, self.angles, self.cell_well)
         resolve_all_collisions(self.centers, self.velocities, self.radii,
                                self.base_radii, self.cell_well, self.wells,
                                self.well_half, self.corner_radius)

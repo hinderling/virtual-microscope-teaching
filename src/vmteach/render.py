@@ -52,24 +52,25 @@ def _smooth_polygon(center: np.ndarray, angles: np.ndarray, radii: np.ndarray,
 def _nucleus_polygon(c, center_px: np.ndarray, scale: float) -> np.ndarray:
     """The nucleus of cell ``c`` as a smooth polygon in output pixels.
 
-    Roundish (it follows the mildly irregular *rest* shape, not the wild
-    protrusions of the membrane) and, in a moving cell, lagging behind the
-    centre toward the tail, as a fibroblast nucleus does. The lag points
-    into the stretched rear of the polygon, so the nucleus stays inside
-    the cell body.
+    Slightly wobbly (it follows the mildly irregular *rest* shape, so it
+    reads as round without being a perfect circle), clamped inside the
+    local cell outline, and lagging a little behind the centre of a
+    moving cell, as a fibroblast nucleus does.
     """
     base = float(c.base_r)
     rest = getattr(c, "rest_r", None)
     if rest is None:
         r_n = np.full(len(c.angles), 0.5 * base)
     else:
-        r_n = 0.5 * (0.65 * base + 0.35 * rest)
+        r_n = 0.5 * (0.55 * base + 0.45 * rest)
+    # never poke through the membrane: cap by the local body radius
+    r_n = np.minimum(r_n, 0.8 * np.asarray(c.r))
     pos = center_px
     m = getattr(c, "motion", None)
     if m is not None:
         speed = float(np.hypot(m[0], m[1]))
         if speed > 1e-3:
-            lag = 0.22 * base * min(1.0, speed / 1.5) * scale
+            lag = 0.08 * base * min(1.0, speed / 1.5) * scale
             pos = center_px - (m / speed) * lag
     return _smooth_polygon(pos, c.angles, r_n, scale)
 
@@ -177,7 +178,7 @@ class CellRenderer:
             img = np.full((h, w), self.FLUO_BG, np.uint8)
             # draw per cell: cytoplasm then nucleus, levels from activity
             for c, p in vis:
-                a = float(getattr(c, "activity", 0.0))
+                a = float(getattr(c, "ktr", getattr(c, "activity", 0.0)))
                 cyto = int(round(self.KTR_CYTO_LO
                                  + a * (self.KTR_CYTO_HI - self.KTR_CYTO_LO)))
                 nuc = int(round(self.KTR_NUC_HI
