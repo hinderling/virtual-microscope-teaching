@@ -49,6 +49,31 @@ def _smooth_polygon(center: np.ndarray, angles: np.ndarray, radii: np.ndarray,
     return np.rint(pts).astype(np.int32)
 
 
+def _nucleus_polygon(c, center_px: np.ndarray, scale: float) -> np.ndarray:
+    """The nucleus of cell ``c`` as a smooth polygon in output pixels.
+
+    Roundish (it follows the mildly irregular *rest* shape, not the wild
+    protrusions of the membrane) and, in a moving cell, lagging behind the
+    centre toward the tail, as a fibroblast nucleus does. The lag points
+    into the stretched rear of the polygon, so the nucleus stays inside
+    the cell body.
+    """
+    base = float(c.base_r)
+    rest = getattr(c, "rest_r", None)
+    if rest is None:
+        r_n = np.full(len(c.angles), 0.5 * base)
+    else:
+        r_n = 0.5 * (0.65 * base + 0.35 * rest)
+    pos = center_px
+    m = getattr(c, "motion", None)
+    if m is not None:
+        speed = float(np.hypot(m[0], m[1]))
+        if speed > 1e-3:
+            lag = 0.22 * base * min(1.0, speed / 1.5) * scale
+            pos = center_px - (m / speed) * lag
+    return _smooth_polygon(pos, c.angles, r_n, scale)
+
+
 def _rounded_square(center_px, half_px: float, corner_px: float,
                     n_arc: int = 12) -> np.ndarray:
     """int32 polygon of a rounded square in output pixels."""
@@ -137,7 +162,7 @@ class CellRenderer:
 
         if mode == 1:      # miRFP: H2B nuclei
             img = np.full((h, w), self.FLUO_BG, np.uint8)
-            polys = [_smooth_polygon(p, c.angles, c.r, scale * 0.5) for c, p in vis]
+            polys = [_nucleus_polygon(c, p, scale) for c, p in vis]
             if polys:
                 cv2.fillPoly(img, polys, self.DAPI_NUCLEUS, lineType=cv2.LINE_AA)
             return img
@@ -158,7 +183,7 @@ class CellRenderer:
                 nuc = int(round(self.KTR_NUC_HI
                                 - a * (self.KTR_NUC_HI - self.KTR_NUC_LO)))
                 body = _smooth_polygon(p, c.angles, c.r, scale)
-                nucleus = _smooth_polygon(p, c.angles, c.r, scale * 0.5)
+                nucleus = _nucleus_polygon(c, p, scale)
                 cv2.fillPoly(img, [body], cyto, lineType=cv2.LINE_AA)
                 cv2.fillPoly(img, [nucleus], nuc, lineType=cv2.LINE_AA)
             return img
@@ -171,7 +196,7 @@ class CellRenderer:
             poly = _smooth_polygon(p, c.angles, c.r, scale)
             bodies.append(poly)
             (halos_stim if getattr(c, "is_stimulated", False) else halos).append(poly)
-            nuclei.append(_smooth_polygon(p, c.angles, c.r, scale * 0.45))
+            nuclei.append(_nucleus_polygon(c, p, scale))
         if bodies:
             cv2.fillPoly(img, bodies, self.PHASE_BODY, lineType=cv2.LINE_AA)
             cv2.fillPoly(img, nuclei, self.PHASE_NUCLEUS, lineType=cv2.LINE_AA)

@@ -24,7 +24,7 @@ pip install "virtual-microscope-teaching[gui] @ git+https://github.com/hinderlin
 
 Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no Micro-Manager device adapters, no C++. Everything is pure Python.
 
-> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. A full 100-cycle feedback experiment runs in ~2 s.
+> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. A full 100-cycle feedback experiment runs in ~4 s.
 
 ## Quick start: a complete feedback experiment
 
@@ -65,6 +65,8 @@ More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → st
 ## The sample: the `optogenetic` backend
 
 Cells expressing a light-sensitive receptor and a live activity readout. Blue light activates the receptor of exactly the illuminated cells; activated cells signal (visible in the reporter channel within ~5 s, reversible within ~20 s) and migrate toward the light.
+
+The cells crawl like fibroblasts instead of gliding: stochastic lamellipodial protrusions adhere to the substrate and pull the cell body forward, while the adhered rear stretches into a dragging tail until tension rips it off (stick-slip). Resting cells are irregular, lumpy and mostly stuck; stimulated cells polarize toward the light, with a broad protrusive front, a trailing rear, and the nucleus lagging behind the centre.
 
 ![every channel of the optogenetic sample](docs/images/channel_gallery.png)
 

@@ -242,6 +242,11 @@ class OptoCellSim:
         self.centers = np.zeros((n, 2))
         self.velocities = np.zeros((n, 2))
         self.radii = np.zeros((n, 24))
+        self.rest_radii = np.zeros((n, 24))
+        self.adhesions = np.zeros((n, 24))
+        self.polarities = np.zeros(n)
+        self.motions = np.zeros((n, 2))
+        self.drives = np.zeros(n)
         self.base_radii = np.zeros(n)
         self.areas = np.zeros(n)
         self.angles = np.linspace(0, 2 * np.pi, 24, endpoint=False)
@@ -249,11 +254,19 @@ class OptoCellSim:
             self.centers[i] = c.center
             self.velocities[i] = c.vel
             self.radii[i] = c.r
+            self.rest_radii[i] = c.rest_r
+            self.adhesions[i] = c.adhesion
+            self.polarities[i] = c.polarity[0]
+            self.motions[i] = c.motion
             self.base_radii[i] = c.base_r
             self.areas[i] = c.area0
             c.center = self.centers[i]
             c.vel = self.velocities[i]
             c.r = self.radii[i]
+            c.rest_r = self.rest_radii[i]
+            c.adhesion = self.adhesions[i]
+            c.polarity = self.polarities[i:i + 1]
+            c.motion = self.motions[i]
             c.angles = self.angles
 
     # ── physics ─────────────────────────────────────────────────────────
@@ -261,16 +274,21 @@ class OptoCellSim:
     def step(self, dt: float = 0.05) -> None:
         """Advance all cells by *dt* (deterministic given _step_count)."""
         update_all_cells_parallel(
-            self.centers, self.velocities, self.radii, self.angles,
-            self.base_radii, self.areas, self.cell_well, self.wells,
-            self.well_half, self.corner_radius, dt,
+            self.centers, self.velocities, self.radii, self.rest_radii,
+            self.adhesions, self.polarities, self.motions, self.angles,
+            self.base_radii, self.areas, self.drives, self.cell_well,
+            self.wells, self.well_half, self.corner_radius, dt,
             step_count=self._step_count)
         self._step_count += 1
         resolve_all_collisions(self.centers, self.velocities, self.radii,
-                               self.cell_well, self.wells,
+                               self.base_radii, self.cell_well, self.wells,
                                self.well_half, self.corner_radius)
-        for c in self._cells:
+        # signalling state -> next step's protrusion drive (recently pulsed
+        # cells protrude more, and sharply toward where the light pointed
+        # them; the drive fades within seconds once the pulses stop)
+        for i, c in enumerate(self._cells):
             c.update_activity(dt)
+            self.drives[i] = c.motility
 
     # ── stimulation ─────────────────────────────────────────────────────
 

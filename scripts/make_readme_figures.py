@@ -15,7 +15,7 @@ import sys
 import cv2
 import numpy as np
 
-from vmteach import load_microscope
+from vmteach import advance, load_microscope
 from vmteach.sim import OptoCellSim
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "docs/images"
@@ -65,6 +65,7 @@ def fig_channel_gallery():
     """
     core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
                                 warmup=False)
+    advance(sim, 20)      # let the cell shapes develop
 
     def snap(ch):
         core.setConfig("Channel", ch)

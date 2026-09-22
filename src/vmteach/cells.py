@@ -1,15 +1,66 @@
 """Cell physics (numba) and the optogenetic cell.
 
 The population lives in flat arrays owned by :class:`vmteach.sim.OptoCellSim`
-(``centers``, ``velocities``, ``radii``); each :class:`OptogeneticCell` holds
-*views* into its own row, so physics, collisions, stimulation and rendering
-all see one copy of the state and nothing has to be synced.
+(``centers``, ``velocities``, ``radii``, ``adhesions``, ...); each
+:class:`OptogeneticCell` holds *views* into its own row, so physics,
+collisions, stimulation and rendering all see one copy of the state and
+nothing has to be synced.
+
+Migration model (stick-slip crawling)
+-------------------------------------
+Cells are star polygons (24 vertices at fixed angles, per-vertex radius)
+that move the way fibroblasts do, not by gliding:
+
+* every vertex can **adhere** to the substrate. Adhered vertices act as
+  springs anchored at their tip: when the cell body moves, they stay
+  (approximately) world-anchored, so the radius behind a moving cell
+  stretches into a dragging tail while overrun front adhesions slacken.
+* **protrusions** fire stochastically, biased toward an internal polarity
+  direction (a persistent random walk, re-pointed by light). A protrusion
+  extends a vertex beyond its rest radius and adheres at the new tip, so
+  it pulls the centre forward.
+* the centre moves by **force balance**: sum of the tension in all adhered
+  vertices, divided by a drag that grows with the number of adhesions. A
+  fully adhered resting cell is sticky and barely moves; motion happens
+  when front protrusions build enough tension to matter.
+* rear adhesions **detach under tension** (stretch beyond a threshold rips
+  them off; the freed vertex retracts toward its rest radius), so
+  displacement comes in lurches: protrude, stick, pull the tail off.
+
+The rest shape itself is irregular (per-cell random low-frequency radial
+modes), so even idle cells are lumpy rather than circular.
 
 Cells live inside wells: rounded squares with a hard boundary that the
 cells collide with (1 world px = 1 um; nothing wraps).
 """
 import numpy as np
 from numba import njit, prange
+
+# ── crawling / adhesion model parameters ──────────────────────────────
+FRICTION = 3.0          # /s: decay of the stimulation impulse velocity
+POL_DIFF = 0.7          # rad/sqrt(s): polarity direction diffusion
+REPOL_TAU = 35.0        # s: mean time between spontaneous repolarizations
+PROTR_RATE = 0.28       # /s per vertex at full polarity alignment
+PROTR_BASE = 0.30       # fraction of PROTR_RATE fired in any direction
+DRIVE_GAIN = 2.0        # extra protrusion rate at full signalling activity
+DRIVE_FOCUS = 0.03      # residual isotropic fraction at full activity
+PROTR_AMP = 0.18        # protrusion size, fraction of base_r
+PROTR_HALF = 3          # protrusion arc half-width, vertices (lamellipodium)
+TRACTION = 0.4          # /s: spring constant of adhered vertices
+DRAG_BODY = 2.0         # baseline drag on the cell body
+DRAG_ADH = 0.8          # extra drag per adhered vertex
+K_ON = 1.5              # /s: re-adhesion rate of relaxed free vertices
+K_OFF = 0.04            # /s: spontaneous adhesion release
+K_OFF_TENSION = 8.0     # /s: extra release rate ~ excess stretch^2
+DETACH_STRETCH = 0.45   # relative stretch where tension release kicks in
+K_OFF_SLACK = 1.0       # /s: release rate of overrun (compressed) adhesions
+RETRACT = 2.2           # /s: relaxation of free vertices toward rest
+CREEP = 0.05            # /s: slow slippage of adhered vertices toward rest
+CURVE_RELAX = 0.14      # Laplacian smoothing of free vertices, per step
+CURVE_RELAX_ADH = 0.03  # gentler smoothing of adhered (anchored) vertices
+RUFFLE_STD = 0.008      # membrane noise on free vertices, fraction of base_r
+AREA_GAIN = 0.5         # soft area conservation gain, per step
+SHAPE_MODES = 0.26      # amplitude of the random rest-shape modes
 
 
 # ------------------------------------------------------------ #
@@ -79,62 +130,145 @@ def calculate_vertices(center: np.ndarray, angles: np.ndarray, r: np.ndarray) ->
 
 @njit(cache=True)
 def update_cell_physics(center: np.ndarray, vel: np.ndarray, r: np.ndarray,
+                        rest: np.ndarray, adh: np.ndarray,
+                        pol_arr: np.ndarray, motion: np.ndarray,
                         angles: np.ndarray, base_r: float, area0: float,
-                        dt: float,
-                        friction: float = 3.0, brownian_d: float = 15.0,
-                        curvature_relax: float = 0.12, radial_relax: float = 0.08,
-                        ruffle_std: float = 0.01, seed: int = 0) -> tuple:
-    """One physics step for one cell (Brownian motion, friction, membrane
-    ruffling and relaxation, area conservation)."""
+                        drive: float, dt: float, seed: int = 0) -> None:
+    """One stick-slip crawling step for one cell (in place).
+
+    ``adh[i] > 0`` marks vertex *i* as adhered to the substrate,
+    ``pol_arr[0]`` is the polarity angle, ``motion`` receives the body
+    velocity of this step (used by the renderer for the nucleus lag).
+    ``drive`` (0..1, the cell's signalling activity) makes protrusions
+    more frequent and sharply focused on the polarity direction, so an
+    optogenetically activated cell crawls where the light pointed it.
+    """
     np.random.seed(seed)
+    n = len(r)
+    sq = np.sqrt(dt)
 
-    # Brownian motion
-    amp = np.random.normal(0, np.sqrt(2 * brownian_d * dt))
-    ang = np.random.uniform(0, 2 * np.pi)
-    vel += amp * np.array([np.cos(ang), np.sin(ang)])
+    # 1. polarity: persistent random walk, occasional repolarization
+    pol = pol_arr[0] + np.random.normal(0.0, POL_DIFF) * sq
+    if np.random.random() < dt / REPOL_TAU:
+        pol = np.random.uniform(0.0, 2.0 * np.pi)
+    pol_arr[0] = pol
 
-    # Update position
-    center += vel * dt
+    # 2. protrusion bursts, biased toward the polarity direction: a broad
+    #    arc (lamellipodium, not a spike) whose new leading edge adheres,
+    #    so it will pull the centre toward itself
+    rate_scale = PROTR_RATE * (1.0 + DRIVE_GAIN * drive)
+    iso = PROTR_BASE * (1.0 - drive) + DRIVE_FOCUS * drive
+    for i in range(n):
+        align = 0.5 + 0.5 * np.cos(angles[i] - pol)
+        rate = rate_scale * (iso + (1.0 - iso) * align * align)
+        if np.random.random() < rate * dt:
+            # spontaneous protrusions are gentle ruffles; signalling
+            # activity turns them into full lamellipodial thrusts
+            amp = (PROTR_AMP * base_r * (0.7 + 0.6 * np.random.random())
+                   * (0.55 + 0.45 * drive))
+            for k in range(-PROTR_HALF, PROTR_HALF + 1):
+                w = np.cos(0.5 * np.pi * k / (PROTR_HALF + 1))
+                r[(i + k) % n] += amp * w * w
+            adh[i] = 1.0
+            adh[(i + 1) % n] = 1.0
+            adh[(i - 1) % n] = 1.0
 
-    # Apply friction
-    vel *= max(0.0, 1.0 - friction * dt)
+    # 3. force balance: adhered vertices under tension pull the centre,
+    #    every adhesion adds drag (a fully stuck resting cell barely moves).
+    #    Signalling activity boosts contractility, so an activated cell
+    #    translates its protrusions into motion much more effectively.
+    tr = TRACTION * (0.5 + 1.0 * drive)
+    fx = 0.0
+    fy = 0.0
+    n_adh = 0.0
+    for i in range(n):
+        if adh[i] > 0.0:
+            n_adh += 1.0
+            s = r[i] - rest[i]
+            if s > 0.0:            # slack adhesions do not push
+                fx += tr * s * np.cos(angles[i])
+                fy += tr * s * np.sin(angles[i])
+    mob = 1.0 / (DRAG_BODY + DRAG_ADH * n_adh)
+    vx = fx * mob + vel[0]         # crawl + stimulation impulse channel
+    vy = fy * mob + vel[1]
+    dx = vx * dt
+    dy = vy * dt
+    center[0] += dx
+    center[1] += dy
+    motion[0] = vx
+    motion[1] = vy
+    vel[0] *= max(0.0, 1.0 - FRICTION * dt)
+    vel[1] *= max(0.0, 1.0 - FRICTION * dt)
 
-    # Membrane ruffling
-    r += np.random.normal(0, ruffle_std * base_r, len(r))
+    # 4. adhered vertices stay world-anchored: compensate the body motion
+    #    radially. The radius behind a moving cell grows (dragging tail),
+    #    overrun front adhesions slacken.
+    for i in range(n):
+        if adh[i] > 0.0:
+            r[i] -= dx * np.cos(angles[i]) + dy * np.sin(angles[i])
 
-    # Curvature relaxation (Laplacian smoothing)
-    lap = np.roll(r, -1) + np.roll(r, 1) - 2 * r
-    r += curvature_relax * lap + radial_relax * (base_r - r)
+    # 5. adhesion turnover: tension rips vertices off (stick-slip), overrun
+    #    ones release quietly, relaxed free vertices re-stick
+    for i in range(n):
+        s_rel = (r[i] - rest[i]) / rest[i]
+        if adh[i] > 0.0:
+            k = K_OFF
+            over = s_rel - DETACH_STRETCH
+            if over > 0.0:
+                k += K_OFF_TENSION * over * over
+            if s_rel < -0.10:
+                k += K_OFF_SLACK
+            if np.random.random() < k * dt:
+                adh[i] = 0.0
+        elif abs(s_rel) < 0.12:
+            if np.random.random() < K_ON * dt:
+                adh[i] = 1.0
 
-    # Constrain radius
-    r = np.clip(r, 0.7 * base_r, 1.3 * base_r)
+    # 6. membrane mechanics: free vertices retract toward the rest shape
+    #    and ruffle; curvature smoothing acts everywhere (membrane tension),
+    #    gently on anchored vertices so the tail is not smoothed away
+    for i in range(n):
+        lap = r[(i + 1) % n] + r[(i - 1) % n] - 2.0 * r[i]
+        if adh[i] <= 0.0:
+            r[i] += RETRACT * dt * (rest[i] - r[i]) + CURVE_RELAX * lap
+            r[i] += np.random.normal(0.0, RUFFLE_STD * base_r)
+        else:
+            # adhesion creep: standing tension slips slowly back toward
+            # rest, so only fresh protrusions keep a cell moving
+            r[i] += CURVE_RELAX_ADH * lap + CREEP * dt * (rest[i] - r[i])
 
-    # conserve area
-    vertices = calculate_vertices(center, angles, r)
-    area = polygon_area(vertices)
-    if area > 0:
-        r *= np.sqrt(area0 / area)
-
-    return center, vel, r
+    # 7. soft area conservation, carried by the free vertices only (the
+    #    adhered ones are anchored); then keep radii in a sane band
+    verts = calculate_vertices(center, angles, r)
+    area = polygon_area(verts)
+    if area > 0.0:
+        corr = AREA_GAIN * (area0 - area) / area0
+        for i in range(n):
+            if adh[i] <= 0.0:
+                r[i] *= 1.0 + corr
+    for i in range(n):
+        r[i] = min(max(r[i], 0.5 * base_r), 2.2 * base_r)
 
 
 @njit(parallel=True, cache=True)
 def update_all_cells_parallel(centers: np.ndarray, velocities: np.ndarray,
-                              radii: np.ndarray, angles: np.ndarray,
+                              radii: np.ndarray, rest_radii: np.ndarray,
+                              adhesions: np.ndarray, polarities: np.ndarray,
+                              motions: np.ndarray, angles: np.ndarray,
                               base_radii: np.ndarray, areas: np.ndarray,
+                              drives: np.ndarray,
                               cell_well: np.ndarray, wells: np.ndarray,
                               half: float, corner: float, dt: float,
-                              friction: float = 3.0, brownian_d: float = 15.0,
                               step_count: int = 0) -> None:
     """Update all cells in parallel (in place) using Numba prange, then
     confine each to its well (``wells``: (n_wells, 2) centres)."""
     n_cells = len(centers)
     for i in prange(n_cells):  # parallel loop
-        centers[i], velocities[i], radii[i] = update_cell_physics(
-            centers[i], velocities[i], radii[i], angles, base_radii[i], areas[i],
-            dt, friction, brownian_d,
-            seed=i + step_count * n_cells
-        )
+        update_cell_physics(
+            centers[i], velocities[i], radii[i], rest_radii[i],
+            adhesions[i], polarities[i:i + 1], motions[i],
+            angles, base_radii[i], areas[i], drives[i], dt,
+            seed=i + step_count * n_cells)
         w = cell_well[i]
         confine(centers[i], velocities[i], radii[i].max(),
                 wells[w, 0], wells[w, 1], half, corner)
@@ -142,19 +276,25 @@ def update_all_cells_parallel(centers: np.ndarray, velocities: np.ndarray,
 
 @njit(cache=True)
 def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
-                           radii: np.ndarray, cell_well: np.ndarray,
+                           radii: np.ndarray, base_radii: np.ndarray,
+                           cell_well: np.ndarray,
                            wells: np.ndarray, half: float, corner: float) -> None:
     """Pairwise overlap resolution (in place).
 
-    Overlapping cells are pushed apart symmetrically along the line of
-    centres and both velocities are zeroed; the pair is then confined to
-    its wells again. Deterministic pair order (i < j), so a rerun gives
-    bit-identical positions.
+    Cells collide with their *bodies* (the base radius), not with the tips
+    of transient protrusions: lamellipodia and tails may overlap a
+    neighbour, as they do in reality. Overlapping cells are pushed apart
+    symmetrically along the line of centres and both velocities are
+    zeroed; the pair is then confined to its wells again (with the full
+    membrane extent, so nothing pokes through the wall). Deterministic
+    pair order (i < j), so a rerun gives bit-identical positions.
     """
     n = centers.shape[0]
     maxr = np.empty(n)
+    core_r = np.empty(n)
     for i in range(n):
         maxr[i] = radii[i].max()
+        core_r[i] = 0.95 * base_radii[i]
     for i in range(n):
         for j in range(i + 1, n):
             dx = centers[j, 0] - centers[i, 0]
@@ -162,7 +302,7 @@ def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
             dist = np.sqrt(dx * dx + dy * dy)
             if dist == 0.0:
                 continue
-            overlap = maxr[i] + maxr[j] - dist
+            overlap = core_r[i] + core_r[j] - dist
             if overlap <= 0.0:
                 continue
             s = 0.5 * (overlap + 0.01)
@@ -186,11 +326,13 @@ def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
 # Cell
 # ------------------------------------------------------------- #
 class CellBase:
-    """Base cell: geometry (centre, vertex radii) and physics parameters.
+    """Base cell: geometry (centre, vertex radii, rest shape) and the
+    crawling state (adhesion, polarity).
 
-    ``center``, ``vel`` and ``r`` are plain arrays at construction; the sim
-    replaces them with views into its population arrays (see
-    ``OptoCellSim._init_arrays``). All updates must therefore be in place.
+    ``center``, ``vel``, ``r``, ``rest_r``, ``adhesion``, ``polarity`` and
+    ``motion`` are plain arrays at construction; the sim replaces them with
+    views into its population arrays (see ``OptoCellSim._init_arrays``).
+    All updates must therefore be in place.
     """
 
     def __init__(self, base_radius: float, vertices: int = 24, seed: int = 0):
@@ -199,12 +341,25 @@ class CellBase:
 
         rng = np.random.RandomState(seed)
         self.base_r = base_radius * (0.85 + 0.3 * rng.random())
-        self.r = np.full(vertices, self.base_r, dtype=np.float64)
         self.angles = np.linspace(0, 2 * np.pi, vertices, endpoint=False)
-        self.area0 = np.pi * self.base_r ** 2
+
+        # irregular rest shape: random low-frequency radial modes, so even
+        # an idle cell is lumpy rather than a circle
+        profile = np.ones(vertices)
+        for m in (2, 3, 4, 5):
+            profile += (rng.uniform(0.0, SHAPE_MODES / m)
+                        * np.cos(m * self.angles + rng.uniform(0, 2 * np.pi)))
+        profile = np.clip(profile, 0.72, 1.35)
+        self.rest_r = self.base_r * profile
+        self.r = self.rest_r.copy()
+        self.area0 = polygon_area(
+            calculate_vertices(np.zeros(2), self.angles, self.rest_r))
 
         self.center = np.zeros(2, dtype=np.float64)   # placed by the sim
         self.vel = np.zeros(2, dtype=np.float64)
+        self.adhesion = np.ones(vertices, dtype=np.float64)  # starts stuck
+        self.polarity = np.array([rng.uniform(0, 2 * np.pi)])
+        self.motion = np.zeros(2, dtype=np.float64)
         self._rng = rng
 
     @property
@@ -234,14 +389,16 @@ class OptogeneticCell(CellBase):
 
     ACTIVITY_RISE = 5.0    # s from a pulse to full activity
     ACTIVITY_DECAY = 15.0  # s from full activity back to 0 (after RISE)
+    MOTILITY_TAU = 4.0     # s: decay of the migration drive after a pulse
 
-    def __init__(self, *args, protrusion_gain: float = 0.05,
-                 impulse: float = 24.0, **kwargs):
+    def __init__(self, *args, protrusion_gain: float = 0.22,
+                 impulse: float = 30.0, **kwargs):
         super().__init__(*args, **kwargs)
         self.protrusion_gain = protrusion_gain
         self.impulse = impulse
         self.is_stimulated = False
         self.activity = 0.0
+        self.motility = 0.0
         self._since_stim = np.inf   # s since the last stimulation pulse
 
     def update_activity(self, dt: float) -> None:
@@ -251,6 +408,10 @@ class OptogeneticCell(CellBase):
             self.activity = min(1.0, self.activity + dt / self.ACTIVITY_RISE)
         else:
             self.activity = max(0.0, self.activity - dt / self.ACTIVITY_DECAY)
+        # migration responds faster than the reporter: the crawl drive is
+        # high only while pulses keep coming, so a cell that stops being
+        # targeted comes to rest quickly instead of overshooting
+        self.motility = float(np.exp(-self._since_stim / self.MOTILITY_TAU))
 
     def stimulate(self, mask: np.ndarray, origin=(0.0, 0.0),
                   scale: float = 1.0) -> None:
@@ -290,19 +451,25 @@ class OptogeneticCell(CellBase):
         self._since_stim = 0.0      # pulse received: activity starts rising
         idx = np.where(inside)[0][hit]
 
-        # protrusion of the illuminated vertices (in place: r is a view)
+        # protrusion of the illuminated vertices (in place: r is a view);
+        # the new protrusions adhere, so they keep pulling the cell along
         self.r[idx] += self.protrusion_gain * self.base_r
+        self.adhesion[idx] = 1.0
         np.clip(self.r, 0.4 * self.base_r, 2.2 * self.base_r, out=self.r)
-        self._conserve_area()
 
-        # impulse toward the illuminated region, scaled by the illuminated
-        # fraction. Sets (does not add) the velocity component toward the
-        # light, so the result is frame-rate independent; the perpendicular
-        # Brownian component is preserved.
+        # light polarizes the cell: subsequent protrusions fire toward the
+        # illuminated side. The rear stays adhered and stretches into a
+        # dragging tail until tension rips it off (see update_cell_physics).
         target = np.mean(vertices[idx], axis=0)
         direction = target - self.center
         norm = np.linalg.norm(direction)
         if norm > 0:
+            self.polarity[0] = float(np.arctan2(direction[1], direction[0]))
+
+            # impulse toward the illuminated region, scaled by the
+            # illuminated fraction. Sets (does not add) the velocity
+            # component toward the light, so the result is frame-rate
+            # independent; the perpendicular component is preserved.
             stim_fraction = len(idx) / len(self.r)
             direction_unit = direction / norm
             desired_speed = self.impulse * stim_fraction
