@@ -11,14 +11,16 @@ It began as a subset of the full [virtual-microscope](https://github.com/hinderl
 ## Install
 
 ```bash
-pip install virtual-microscope-teaching
+pip install git+https://github.com/hinderling/virtual-microscope-teaching
 ```
 
 With the napari GUI (interactive microscope control, results exploration):
 
 ```bash
-pip install "virtual-microscope-teaching[gui]"
+pip install "virtual-microscope-teaching[gui] @ git+https://github.com/hinderling/virtual-microscope-teaching"
 ```
+
+(A PyPI release will follow once the pymmcore-plus version this package depends on is published; until then, installation is from GitHub.)
 
 Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no Micro-Manager device adapters, no C++. Everything is pure Python.
 
