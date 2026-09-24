@@ -66,7 +66,9 @@ More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → st
 
 Cells expressing a light-sensitive receptor and a live activity readout. Blue light activates the receptor of exactly the illuminated cells; activated cells signal (visible in the reporter channel within ~5 s, reversible within ~20 s) and migrate toward the light.
 
-The cells crawl like fibroblasts instead of gliding: stochastic lamellipodial protrusions adhere to the substrate and pull the cell body forward, while the adhered rear stretches into a dragging tail until tension rips it off (stick-slip). Resting cells are irregular, lumpy and mostly stuck; stimulated cells polarize toward the light, with a broad protrusive front, a trailing rear, and the nucleus lagging behind the centre.
+The cells crawl like fibroblasts instead of gliding: stochastic lamellipodial protrusions adhere to the substrate and pull the cell body forward, while the adhered rear stretches into a dragging tail until tension rips it off (stick-slip). Resting cells are irregular, lumpy and mostly stuck; stimulated cells polarize toward the light, with a broad protrusive front, a trailing rear, and the nucleus lagging behind the centre. Neighbours do not overlap: a membrane that meets another cell stops and conforms to it (contact inhibition), and a cell squeezed by a crowd pushes back, so dense groups pack like a monolayer instead of piling up.
+
+The images are made to read like widefield microscopy while staying easy to segment: every channel is derived from a per-cell thickness profile (thick over the nucleus, thin at the lamellipodia), nuclei carry chromatin texture and nucleoli, expression varies from cell to cell within a band a plain threshold still handles, and the camera adds out-of-focus glow, slightly uneven illumination, an offset, a few hot pixels and shot noise. There is deliberately no photobleaching: the sample can be imaged indefinitely, so a training session never has to stop and reset it.
 
 ![every channel of the optogenetic sample](docs/images/channel_gallery.png)
 
@@ -128,7 +130,7 @@ The virtual microscope is built like a real one: a fixed camera behind an object
 | Objectives | 4x (2.5 um/px, 1280 um field), 10x (1.0, 512), 20x (0.5, 256), 40x (0.25, 128), 60x (0.167, 85). `core.getPixelSizeUm()` reports them from the pixel-size presets in the `.cfg`, times the binning |
 | Binning | `Camera` > `Binning` presets 1 / 2 / 4: the frame shrinks to 512/b and each output pixel sums b^2 sensor pixels, so the image gets b^2 brighter and saturates unless the exposure comes down, as on a real 8-bit camera |
 | SLM / DMD | 512 x 512 pixels projected 1:1 onto the sensor at every objective (a perfectly calibrated projector). `sim.slm_affine` (2x3) models a misaligned projector for the DMD calibration exercise |
-| Phase contrast | neutral mid-gray background; cells are slightly darker with a bright halo at the edge and a darker nucleus |
+| Phase contrast | neutral mid-gray background; cells darken with thickness, with a bright halo that is strong around thick parts and faint at thin protrusions; lighter nucleus with dark nucleoli and perinuclear granules; retraction fibres behind moving cells; a little static debris on the substrate |
 
 ![well layouts](docs/images/well_layouts.png)
 

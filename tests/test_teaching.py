@@ -286,7 +286,8 @@ def test_well_wall_visible_in_phase_only(scope):
     assert np.median(outside) < np.median(inside) - 20, "plastic not darker"
     profile = np.median(ph, axis=0)                  # column profile
     assert profile[200:300].max() > np.median(inside) + 12, "no bright well edge"
-    assert fl[:, 300:].max() < 60, "wall visible in fluorescence"
+    # percentile, not max: the camera has a few hot pixels, as real ones do
+    assert np.percentile(fl[:, 300:], 99.9) < 60, "wall visible in fluorescence"
 
 
 # ── realism: camera, objectives, binning, SLM at magnification ───────────

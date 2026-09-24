@@ -71,6 +71,7 @@ SHAPE_MODES = 0.34      # amplitude of the random rest-shape modes
 CONTACT_SURFACE = 0.92  # membranes conform at this fraction of the
                         # neighbour's local radius (contact inhibition)
 BODY_GUARD = 0.7        # cell bodies (nucleus scale) may not merge
+PRESSURE = 1.2         # /s: elastic push-back of a compressed cell
 
 
 # ------------------------------------------------------------ #
@@ -309,26 +310,36 @@ def update_all_cells_parallel(centers: np.ndarray, velocities: np.ndarray,
 
 @njit(parallel=True, cache=True)
 def conform_membranes(centers: np.ndarray, radii_in: np.ndarray,
-                      radii_out: np.ndarray, base_radii: np.ndarray,
-                      angles: np.ndarray, cell_well: np.ndarray) -> None:
-    """Contact inhibition of protrusion (in place, on ``radii_out``).
+                      radii_out: np.ndarray, rest_radii: np.ndarray,
+                      base_radii: np.ndarray, angles: np.ndarray,
+                      cell_well: np.ndarray, pushes: np.ndarray,
+                      dt: float) -> None:
+    """Contact inhibition of protrusion plus contact pressure (in place).
 
     Any vertex that would sit inside a neighbouring cell's outline is
-    clamped back to the contact surface: membranes press against each
-    other and conform instead of overlapping, and a protrusion that runs
-    into a neighbour stops advancing, which stalls the traction it
-    provides and thereby the cell's migration. Cells themselves are not
-    pushed apart here (see ``resolve_all_collisions`` for the body guard),
-    so crowded populations can snuggle up and fill voids.
+    clamped back to the contact surface (``radii_out``): membranes press
+    against each other and conform instead of overlapping, and a
+    protrusion that runs into a neighbour stops advancing, which stalls
+    the traction it provides and thereby the cell's migration.
+
+    A cell compressed by its neighbours pushes back: every contacting
+    vertex squeezed below its rest radius contributes an elastic force
+    on the cell's centre, away from the contact (``pushes``, a
+    displacement for this step). Weak enough that crowded cells still
+    snuggle up and fill voids, strong enough that a crowd cannot squash
+    cells far below their own area.
 
     Reads only the ``radii_in`` snapshot and writes only row *i* of
-    ``radii_out``, so the parallel loop is race-free and deterministic.
+    ``radii_out`` and ``pushes``, so the parallel loop is race-free and
+    deterministic.
     """
     n, nv = radii_in.shape
     two_pi = 2.0 * np.pi
     for i in prange(n):
         cx, cy = centers[i, 0], centers[i, 1]
         rmax_i = radii_in[i].max()
+        pushes[i, 0] = 0.0
+        pushes[i, 1] = 0.0
         for j in range(n):
             if j == i or cell_well[j] != cell_well[i]:
                 continue
@@ -347,8 +358,14 @@ def conform_membranes(centers: np.ndarray, radii_in: np.ndarray,
                 kj = int(round(np.arctan2(ddy, ddx) / two_pi * nv)) % nv
                 lim = CONTACT_SURFACE * radii_in[j, kj]
                 if d < lim:
-                    radii_out[i, v] = max(rv - (lim - d),
-                                          0.5 * base_radii[i])
+                    rv = max(rv - (lim - d), 0.5 * base_radii[i])
+                    radii_out[i, v] = rv
+                    comp = rest_radii[i, v] - rv
+                    if comp > 0.0:
+                        pushes[i, 0] -= np.cos(angles[v]) * comp
+                        pushes[i, 1] -= np.sin(angles[v]) * comp
+        pushes[i, 0] *= PRESSURE * dt
+        pushes[i, 1] *= PRESSURE * dt
 
 
 @njit(cache=True)
@@ -417,7 +434,7 @@ class CellBase:
         self.seed = seed
 
         rng = np.random.RandomState(seed)
-        self.base_r = base_radius * (0.85 + 0.3 * rng.random())
+        self.base_r = base_radius * (0.78 + 0.44 * rng.random())
         self.angles = np.linspace(0, 2 * np.pi, vertices, endpoint=False)
 
         # irregular rest shape: random low-frequency radial modes, so even

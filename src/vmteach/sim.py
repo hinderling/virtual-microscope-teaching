@@ -126,16 +126,27 @@ class OptoCellSim:
         self.binning = 1
         self.slm_affine: np.ndarray | None = None   # SLM -> sensor, 2x3
 
+        # static substrate debris (phase contrast only): ~2 particles per
+        # 10x field, from its own seed so the cell population is unchanged
+        drng = np.random.default_rng(seed + 900)
+        n_debris = int(round(2 * self.width * self.height / FIELD_UM ** 2))
+        debris = np.column_stack([drng.uniform(0, self.width, n_debris),
+                                  drng.uniform(0, self.height, n_debris),
+                                  drng.uniform(1.0, 3.0, n_debris)])
         self.renderer = CellRenderer(self.wells, self.well_half,
-                                     self.corner_radius)
-        # per-channel optics (independent seeded noise streams)
+                                     self.corner_radius, debris=debris)
+        # per-channel optics (independent seeded noise streams). The
+        # widefield fluorescence channels get out-of-focus glow and a
+        # slightly off-centre illumination hotspot
+        fluo = dict(psf_sigma=1.0, read_std=2.5, photon_k=0.45, glow=0.10,
+                    vignette=0.14, vignette_center=(0.18, -0.12))
         self._optics = {
             0: Optics(seed + 300, psf_sigma=0.7, read_std=2.0, photon_k=0.30),
-            1: Optics(seed + 301, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
-            2: Optics(seed + 302, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
+            1: Optics(seed + 301, **fluo),
+            2: Optics(seed + 302, **fluo),
             # stimulation-light channel: strong halo, bright, noisy
             3: Optics(seed + 303, psf_sigma=1.6, read_std=3.0, photon_k=0.50),
-            4: Optics(seed + 304, psf_sigma=1.0, read_std=2.5, photon_k=0.45),
+            4: Optics(seed + 304, **fluo),
         }
 
         self._seed = seed
@@ -248,6 +259,7 @@ class OptoCellSim:
         self.polarities = np.zeros(n)
         self.motions = np.zeros((n, 2))
         self.drives = np.zeros(n)
+        self._pushes = np.zeros((n, 2))
         n_fronts = len(self._cells[0].front_ttl)
         self.front_angs = np.zeros((n, n_fronts))
         self.front_ttls = np.zeros((n, n_fronts))
@@ -292,7 +304,9 @@ class OptoCellSim:
         # inhibition of protrusion); bodies must still never merge
         snapshot = self.radii.copy()
         conform_membranes(self.centers, snapshot, self.radii,
-                          self.base_radii, self.angles, self.cell_well)
+                          self.rest_radii, self.base_radii, self.angles,
+                          self.cell_well, self._pushes, dt)
+        self.centers += self._pushes
         resolve_all_collisions(self.centers, self.velocities, self.radii,
                                self.base_radii, self.cell_well, self.wells,
                                self.well_half, self.corner_radius)
