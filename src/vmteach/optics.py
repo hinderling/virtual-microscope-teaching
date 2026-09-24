@@ -44,7 +44,7 @@ def _hot_pixels(shape: tuple[int, int]):
         rng = np.random.default_rng(_HOT_SEED + shape[0])
         n = max(1, int(_HOT_FRACTION * shape[0] * shape[1]))
         idx = rng.choice(shape[0] * shape[1], n, replace=False)
-        amp = rng.uniform(25.0, 110.0, n).astype(np.float32)
+        amp = rng.uniform(12.0, 40.0, n).astype(np.float32)
         _hot_cache[shape] = (idx, amp)
     return _hot_cache[shape]
 
