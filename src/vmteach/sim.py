@@ -38,7 +38,10 @@ import cv2
 import numpy as np
 
 from vmteach.cells import (
+    SIG_MOTILITY,
     OptogeneticCell,
+    build_grid,
+    update_signalling,
     conform_membranes,
     resolve_all_collisions,
     update_all_cells_parallel,
@@ -260,6 +263,8 @@ class OptoCellSim:
         self.motions = np.zeros((n, 2))
         self.drives = np.zeros(n)
         self._pushes = np.zeros((n, 2))
+        self.signals = np.zeros((n, 5))
+        self._sig_rng = np.random.default_rng(self._seed + 500)
         self.golgi_dirs = np.zeros((n, 2))
         self.fibre_xy = np.zeros((0, 2))
         self.fibre_cell = np.zeros(0, dtype=int)
@@ -295,6 +300,8 @@ class OptoCellSim:
             c.front_ttl = self.front_ttls[i]
             self.golgi_dirs[i] = (np.cos(c.polarity[0]), np.sin(c.polarity[0]))
             c.golgi_dir = self.golgi_dirs[i]
+            self.signals[i] = c._sig
+            c._sig = self.signals[i]
             c.angles = self.angles
 
     # ── physics ─────────────────────────────────────────────────────────
@@ -355,13 +362,18 @@ class OptoCellSim:
         # membranes press against neighbours and conform (contact
         # inhibition of protrusion); bodies must still never merge
         snapshot = self.radii.copy()
+        # neighbour grid: bins as large as the largest possible contact
+        # distance (two maximally protruded cells), plus a margin for the
+        # small pushes applied between the passes
+        size = 2.0 * float(snapshot.max()) + 2.0
+        grid = build_grid(self.centers, size)
         conform_membranes(self.centers, snapshot, self.radii,
                           self.rest_radii, self.base_radii, self.angles,
-                          self.cell_well, self._pushes, dt)
+                          self.cell_well, self._pushes, dt, *grid)
         self.centers += self._pushes
         resolve_all_collisions(self.centers, self.velocities, self.radii,
                                self.base_radii, self.cell_well, self.wells,
-                               self.well_half, self.corner_radius)
+                               self.well_half, self.corner_radius, *grid)
         # signalling state -> next step's protrusion drive (recently pulsed
         # cells protrude more, and sharply toward where the light pointed
         # them; the drive fades within seconds once the pulses stop)
@@ -372,9 +384,9 @@ class OptoCellSim:
         self.golgi_dirs /= np.maximum(
             np.hypot(self.golgi_dirs[:, 0], self.golgi_dirs[:, 1]), 1e-9)[:, None]
         self._update_fibres(adh_before, dt)
-        for i, c in enumerate(self._cells):
-            c.update_activity(dt)
-            self.drives[i] = c.motility
+        update_signalling(self.signals, dt,
+                          self._sig_rng.standard_normal(self.n_cells))
+        self.drives[:] = self.signals[:, SIG_MOTILITY]
 
     # ── stimulation ─────────────────────────────────────────────────────
 
@@ -416,8 +428,19 @@ class OptoCellSim:
         sensor = self.slm_on_sensor(mask)
         origin = tuple(self.view_origin)
         scale = self.scale
-        for c in self._cells:
-            c.stimulate(sensor, origin=origin, scale=scale)
+        # only cells that can reach the illuminated field need the per-cell
+        # test; everyone else simply receives no light
+        fov = self.fov_um
+        reach = self.radii.max(axis=1)
+        near = ((self.centers[:, 0] + reach > origin[0])
+                & (self.centers[:, 0] - reach < origin[0] + fov)
+                & (self.centers[:, 1] + reach > origin[1])
+                & (self.centers[:, 1] - reach < origin[1] + fov))
+        for i, c in enumerate(self._cells):
+            if near[i]:
+                c.stimulate(sensor, origin=origin, scale=scale)
+            else:
+                c.is_stimulated = False
 
     # ── device hooks ────────────────────────────────────────────────────
 

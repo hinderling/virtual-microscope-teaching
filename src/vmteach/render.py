@@ -260,7 +260,7 @@ class CellRenderer:
     # fluorescence (gray levels at expression 1)
     FLUO_BG = 6
     H2B = 160
-    MEMBRANE = 150
+    MEMBRANE = 105
     # ERK-KTR (mode 4): intensities interpolate with cell.ktr / activity
     KTR_CYTO_LO, KTR_CYTO_HI = 45, 110      # cytoplasm: dim -> bright
     KTR_NUC_LO, KTR_NUC_HI = 40, 170        # nucleus:  bright -> dark
@@ -520,9 +520,10 @@ class CellRenderer:
             tex = self._texture(shape, bodies, [p for _, p in vis], scale) if use_tex else 0.0
             fill_f = fill.astype(f) / 255.0 * _EXPR_MAX
             vesicles = np.clip(tex - 1.8, 0.0, None) * fill_f
+            # flat fibroblasts: the rim is only ~20% brighter than the body
             sig = (0.30 * fill_f
-                   + 0.45 * blur(rim.astype(f) / 255.0, 0.7 * scale) * _EXPR_MAX
-                   + 0.45 * blur(golgi.astype(f) / 255.0, 0.8 * scale)
+                   + 0.24 * blur(rim.astype(f) / 255.0, 0.7 * scale) * _EXPR_MAX
+                   + 0.225 * blur(golgi.astype(f) / 255.0, 0.8 * scale)
                    * _EXPR_MAX * (1.0 + 0.5 * tex)
                    + 0.35 * vesicles
                    + 0.35 * fib_f)

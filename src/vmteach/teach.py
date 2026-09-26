@@ -442,7 +442,7 @@ def letter_mask(char: str, shape: tuple = (512, 512),
     """Binary target image of a letter, centered, for the assembly exercise.
 
     Args:
-        char: A single character (e.g. ``"L"``).
+        char: A single character (e.g. ``"N"``).
         shape: Output image shape ``(height, width)``.
         fill: Approximate fraction of the smaller image dimension the
             letter should span.

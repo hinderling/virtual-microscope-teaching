@@ -13,7 +13,7 @@ from vmteach import load_microscope, advance, letter_mask, overlay
 # Smaller, more numerous cells + a fat letter: cells are solid objects that
 # keep a collision distance (~2 cell radii), so the stroke must fit them.
 core, sim = load_microscope("optogenetic", n_cells=40, seed=0, base_radius=13.0)
-target = letter_mask("L", fill=0.65, thickness=55)
+target = letter_mask("N", fill=0.65, thickness=55)
 
 # %%
 # Routing map: aim cells at the CORE of the letter stroke (distance-transform
@@ -70,7 +70,7 @@ def build_letter_mask(cells, step_px=12, spot_r=11, occupied_r=28,
 
 
 # %%
-# Run the feedback loop (~15 s for 500 cycles)
+# Run the feedback loop (~20 s for 500 cycles)
 sim.reset()
 for i in range(500):
     core.setConfig("Channel", "miRFP")        # light off, acquire nuclei

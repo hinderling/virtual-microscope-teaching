@@ -318,12 +318,45 @@ def update_all_cells_parallel(centers: np.ndarray, velocities: np.ndarray,
                 wells[w, 0], wells[w, 1], half, corner)
 
 
+@njit(cache=True)
+def build_grid(centers: np.ndarray, cell_size: float):
+    """Uniform spatial grid over the cell centres (CSR layout).
+
+    Returns ``(order, start, bx, by, nx, ny)``: the cells sorted by bin
+    (stable, so deterministic), per-bin start offsets into ``order``, and
+    each cell's bin coordinates. Neighbour searches then scan the 3 x 3
+    surrounding bins instead of every cell, which makes the contact
+    passes ~linear in the population size.
+    """
+    n = centers.shape[0]
+    x0 = centers[:, 0].min()
+    y0 = centers[:, 1].min()
+    nx = int((centers[:, 0].max() - x0) / cell_size) + 1
+    ny = int((centers[:, 1].max() - y0) / cell_size) + 1
+    bx = np.empty(n, np.int64)
+    by = np.empty(n, np.int64)
+    key = np.empty(n, np.int64)
+    for i in range(n):
+        bx[i] = int((centers[i, 0] - x0) / cell_size)
+        by[i] = int((centers[i, 1] - y0) / cell_size)
+        key[i] = by[i] * nx + bx[i]
+    order = np.argsort(key, kind="mergesort")
+    start = np.zeros(nx * ny + 1, np.int64)
+    for i in range(n):
+        start[key[i] + 1] += 1
+    for b in range(nx * ny):
+        start[b + 1] += start[b]
+    return order, start, bx, by, nx, ny
+
+
 @njit(parallel=True, cache=True)
 def conform_membranes(centers: np.ndarray, radii_in: np.ndarray,
                       radii_out: np.ndarray, rest_radii: np.ndarray,
                       base_radii: np.ndarray, angles: np.ndarray,
                       cell_well: np.ndarray, pushes: np.ndarray,
-                      dt: float) -> None:
+                      dt: float, order: np.ndarray, start: np.ndarray,
+                      bx: np.ndarray, by: np.ndarray, gnx: int,
+                      gny: int) -> None:
     """Contact inhibition of protrusion plus contact pressure (in place).
 
     Any vertex that would sit inside a neighbouring cell's outline is
@@ -350,30 +383,34 @@ def conform_membranes(centers: np.ndarray, radii_in: np.ndarray,
         rmax_i = radii_in[i].max()
         pushes[i, 0] = 0.0
         pushes[i, 1] = 0.0
-        for j in range(n):
-            if j == i or cell_well[j] != cell_well[i]:
+        for gy in range(max(0, by[i] - 1), min(gny, by[i] + 2)):
+          for gx in range(max(0, bx[i] - 1), min(gnx, bx[i] + 2)):
+            b = gy * gnx + gx
+            for kk in range(start[b], start[b + 1]):
+              j = order[kk]
+              if j == i or cell_well[j] != cell_well[i]:
                 continue
-            dx = centers[j, 0] - cx
-            dy = centers[j, 1] - cy
-            dc = np.sqrt(dx * dx + dy * dy)
-            if dc >= rmax_i + radii_in[j].max():
-                continue
-            for v in range(nv):
-                rv = radii_out[i, v]
-                px = cx + np.cos(angles[v]) * rv
-                py = cy + np.sin(angles[v]) * rv
-                ddx = px - centers[j, 0]
-                ddy = py - centers[j, 1]
-                d = np.sqrt(ddx * ddx + ddy * ddy)
-                kj = int(round(np.arctan2(ddy, ddx) / two_pi * nv)) % nv
-                lim = CONTACT_SURFACE * radii_in[j, kj]
-                if d < lim:
-                    rv = max(rv - (lim - d), 0.5 * base_radii[i])
-                    radii_out[i, v] = rv
-                    comp = rest_radii[i, v] - rv
-                    if comp > 0.0:
-                        pushes[i, 0] -= np.cos(angles[v]) * comp
-                        pushes[i, 1] -= np.sin(angles[v]) * comp
+              dx = centers[j, 0] - cx
+              dy = centers[j, 1] - cy
+              dc = np.sqrt(dx * dx + dy * dy)
+              if dc >= rmax_i + radii_in[j].max():
+                  continue
+              for v in range(nv):
+                  rv = radii_out[i, v]
+                  px = cx + np.cos(angles[v]) * rv
+                  py = cy + np.sin(angles[v]) * rv
+                  ddx = px - centers[j, 0]
+                  ddy = py - centers[j, 1]
+                  d = np.sqrt(ddx * ddx + ddy * ddy)
+                  kj = int(round(np.arctan2(ddy, ddx) / two_pi * nv)) % nv
+                  lim = CONTACT_SURFACE * radii_in[j, kj]
+                  if d < lim:
+                      rv = max(rv - (lim - d), 0.5 * base_radii[i])
+                      radii_out[i, v] = rv
+                      comp = rest_radii[i, v] - rv
+                      if comp > 0.0:
+                          pushes[i, 0] -= np.cos(angles[v]) * comp
+                          pushes[i, 1] -= np.sin(angles[v]) * comp
         pushes[i, 0] *= PRESSURE * dt
         pushes[i, 1] *= PRESSURE * dt
 
@@ -382,7 +419,10 @@ def conform_membranes(centers: np.ndarray, radii_in: np.ndarray,
 def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
                            radii: np.ndarray, base_radii: np.ndarray,
                            cell_well: np.ndarray,
-                           wells: np.ndarray, half: float, corner: float) -> None:
+                           wells: np.ndarray, half: float, corner: float,
+                           order: np.ndarray, start: np.ndarray,
+                           bx: np.ndarray, by: np.ndarray, gnx: int,
+                           gny: int) -> None:
     """Pairwise body-guard resolution (in place).
 
     Membrane contact is handled by ``conform_membranes`` (membranes press
@@ -390,8 +430,8 @@ def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
     (nucleus scale, ``BODY_GUARD`` x base radius) from merging.
     Overlapping bodies are pushed apart symmetrically along the line of
     centres and both velocities are zeroed; the pair is then confined to
-    its wells again. Deterministic pair order (i < j), so a rerun gives
-    bit-identical positions.
+    its wells again. Deterministic pair order (i ascending, neighbours
+    j > i in grid order), so a rerun gives bit-identical positions.
     """
     n = centers.shape[0]
     maxr = np.empty(n)
@@ -400,7 +440,13 @@ def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
         maxr[i] = radii[i].max()
         guard[i] = BODY_GUARD * base_radii[i]
     for i in range(n):
-        for j in range(i + 1, n):
+      for gy in range(max(0, by[i] - 1), min(gny, by[i] + 2)):
+        for gx in range(max(0, bx[i] - 1), min(gnx, bx[i] + 2)):
+          b = gy * gnx + gx
+          for kk in range(start[b], start[b + 1]):
+            j = order[kk]
+            if j <= i:
+                continue
             dx = centers[j, 0] - centers[i, 0]
             dy = centers[j, 1] - centers[i, 1]
             dist = np.sqrt(dx * dx + dy * dy)
@@ -424,6 +470,40 @@ def resolve_all_collisions(centers: np.ndarray, velocities: np.ndarray,
                     wells[wi, 0], wells[wi, 1], half, corner)
             confine(centers[j], velocities[j], maxr[j],
                     wells[wj, 0], wells[wj, 1], half, corner)
+
+
+# signalling state columns (one row per cell)
+SIG_SINCE, SIG_ACTIVITY, SIG_NOISE, SIG_KTR, SIG_MOTILITY = range(5)
+ACTIVITY_RISE = 5.0     # s from a pulse to full activity
+ACTIVITY_DECAY = 15.0   # s from full activity back to 0 (after RISE)
+MOTILITY_TAU = 4.0      # s: decay of the migration drive after a pulse
+KTR_NOISE_TAU = 10.0    # s: timescale of the baseline activity noise
+KTR_NOISE_STD = 0.03    # stationary std of the baseline noise
+KTR_BASE = 0.05         # mean baseline activity (0..0.1 band)
+
+
+def update_signalling(sig: np.ndarray, dt: float, normals: np.ndarray) -> None:
+    """Advance the signalling state of all cells by ``dt`` (in place).
+
+    Activity rises to 1 within ``ACTIVITY_RISE`` s of a pulse and decays
+    back to 0 over ``ACTIVITY_DECAY`` s once pulses stop. Migration
+    responds faster than the reporter (the crawl drive decays with
+    ``MOTILITY_TAU``), so a cell that stops being targeted comes to rest
+    instead of overshooting. The rendered reporter adds a per-cell
+    baseline fluctuation (an OU process, ~10 s timescale), as real
+    reporters show. ``normals``: one standard normal draw per cell.
+    """
+    since = sig[:, SIG_SINCE]
+    since += dt
+    rising = since <= ACTIVITY_RISE
+    act = sig[:, SIG_ACTIVITY]
+    act[:] = np.where(rising, np.minimum(1.0, act + dt / ACTIVITY_RISE),
+                      np.maximum(0.0, act - dt / ACTIVITY_DECAY))
+    sig[:, SIG_MOTILITY] = np.exp(-since / MOTILITY_TAU)
+    noise = sig[:, SIG_NOISE]
+    noise += (-noise / KTR_NOISE_TAU * dt
+              + KTR_NOISE_STD * np.sqrt(2.0 * dt / KTR_NOISE_TAU) * normals)
+    sig[:, SIG_KTR] = np.clip(act + KTR_BASE + noise, 0.0, 1.0)
 
 
 # ------------------------------------------------------------- #
@@ -493,12 +573,8 @@ class OptogeneticCell(CellBase):
     timelapse imaging or tracking.
     """
 
-    ACTIVITY_RISE = 5.0    # s from a pulse to full activity
-    ACTIVITY_DECAY = 15.0  # s from full activity back to 0 (after RISE)
-    MOTILITY_TAU = 4.0     # s: decay of the migration drive after a pulse
-    KTR_NOISE_TAU = 10.0   # s: timescale of the baseline activity noise
-    KTR_NOISE_STD = 0.03   # stationary std of the baseline noise
-    KTR_BASE = 0.05        # mean baseline activity (0..0.1 band)
+    ACTIVITY_RISE = ACTIVITY_RISE
+    ACTIVITY_DECAY = ACTIVITY_DECAY
 
     def __init__(self, *args, protrusion_gain: float = 0.22,
                  impulse: float = 30.0, **kwargs):
@@ -506,31 +582,25 @@ class OptogeneticCell(CellBase):
         self.protrusion_gain = protrusion_gain
         self.impulse = impulse
         self.is_stimulated = False
-        self.activity = 0.0
-        self.motility = 0.0
-        self.ktr = 0.0              # rendered pathway activity, with noise
-        self._ktr_noise = 0.0       # OU state of the baseline fluctuation
-        self._since_stim = np.inf   # s since the last stimulation pulse
+        # signalling state, one row of the sim's ``signals`` array once the
+        # cell belongs to a sim (see SIG_* for the columns)
+        self._sig = np.array([np.inf, 0.0, 0.0, 0.0, 0.0])
+
+    # s since the last stimulation pulse
+    _since_stim = property(lambda self: float(self._sig[SIG_SINCE]),
+                           lambda self, v: self._sig.__setitem__(SIG_SINCE, v))
+    # pathway activity in [0, 1] (the pure light response)
+    activity = property(lambda self: float(self._sig[SIG_ACTIVITY]),
+                        lambda self, v: self._sig.__setitem__(SIG_ACTIVITY, v))
+    # rendered reporter state: activity + baseline noise
+    ktr = property(lambda self: float(self._sig[SIG_KTR]))
+    # migration drive (decays faster than the reporter)
+    motility = property(lambda self: float(self._sig[SIG_MOTILITY]))
 
     def update_activity(self, dt: float) -> None:
-        """Advance the signalling state by ``dt`` seconds (deterministic)."""
-        self._since_stim += dt
-        if self._since_stim <= self.ACTIVITY_RISE:
-            self.activity = min(1.0, self.activity + dt / self.ACTIVITY_RISE)
-        else:
-            self.activity = max(0.0, self.activity - dt / self.ACTIVITY_DECAY)
-        # migration responds faster than the reporter: the crawl drive is
-        # high only while pulses keep coming, so a cell that stops being
-        # targeted comes to rest quickly instead of overshooting
-        self.motility = float(np.exp(-self._since_stim / self.MOTILITY_TAU))
-        # baseline pathway noise (per-cell OU process, ~10 s timescale):
-        # unstimulated cells fluctuate a few percent, as real reporters do
-        tau, std = self.KTR_NOISE_TAU, self.KTR_NOISE_STD
-        self._ktr_noise += (-self._ktr_noise / tau * dt
-                            + std * np.sqrt(2.0 * dt / tau)
-                            * self._rng.standard_normal())
-        self.ktr = float(np.clip(
-            self.activity + self.KTR_BASE + self._ktr_noise, 0.0, 1.0))
+        """Advance this cell's signalling state by ``dt`` seconds."""
+        update_signalling(self._sig[None, :], dt,
+                          self._rng.standard_normal(1))
 
     def stimulate(self, mask: np.ndarray, origin=(0.0, 0.0),
                   scale: float = 1.0) -> None:

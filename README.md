@@ -6,7 +6,7 @@ A **minimal virtual microscope for learning and testing smart microscopy**: a si
 
 Code written against the virtual microscope runs unchanged on real hardware: `core.snapImage()`, `core.setConfig("Channel", ...)`, `core.setSLMImage(...)` are the identical calls in both worlds, because both implement the same Micro-Manager core API. That also makes this package a lightweight, deterministic stand-in for a real microscope in the test suites of acquisition and control software.
 
-It began as a subset of the full [virtual-microscope](https://github.com/hinderling/virtual-microscope) research simulator and was rewritten for teaching: ~2,000 lines of Python, 4 ms per frame (250 fps) on a laptop. The NEUBIAS [training-resources](https://neubias.github.io/training-resources/) modules on smart microscopy build their exercises on it.
+It began as a subset of the full [virtual-microscope](https://github.com/hinderling/virtual-microscope) research simulator and was rewritten for teaching: ~2,800 lines of Python, 5 to 10 ms per frame (100 to 200 fps) on a laptop. The NEUBIAS [training-resources](https://neubias.github.io/training-resources/) modules on smart microscopy build their exercises on it.
 
 ## Install
 
@@ -24,7 +24,7 @@ pip install "virtual-microscope-teaching[gui] @ git+https://github.com/hinderlin
 
 Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no Micro-Manager device adapters, no C++. Everything is pure Python.
 
-> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. A full 100-cycle feedback experiment runs in ~4 s.
+> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. A full 100-cycle feedback experiment runs in ~3 s.
 
 ## Quick start: a complete feedback experiment
 
