@@ -42,12 +42,12 @@ FRICTION = 3.0          # /s: decay of the stimulation impulse velocity
 POL_DIFF = 0.7          # rad/sqrt(s): polarity direction diffusion
 REPOL_TAU = 35.0        # s: mean time between spontaneous repolarizations
 N_FRONTS = 3            # protrusion fronts a cell can maintain at once
-FRONT_SPAWN = 0.5       # /s per free slot: new spontaneous front
+FRONT_SPAWN = 0.8       # /s per free slot: new spontaneous front
 FRONT_DRIVE_SPAWN = 2.0  # extra spawn rate at full signalling activity
 FRONT_TTL_MIN = 2.0     # s: front lifetime, uniform in [MIN, MAX]
 FRONT_TTL_MAX = 5.0
 FRONT_W = 0.9           # rad: angular half-width of a front (~±50 deg)
-FRONT_GROW = 2.2        # um/s: radial growth at the front apex
+FRONT_GROW = 3.0        # um/s: radial growth at the front apex
 FRONT_DRIVE_AMP = 0.45  # growth boost at full signalling activity
 FRONT_SPREAD_REST = 2.6  # rad: spawn direction noise around polarity, resting
 FRONT_SPREAD_DRIVE = 0.25  # rad: spawn direction noise at full activity
@@ -67,6 +67,8 @@ CURVE_RELAX = 0.14      # Laplacian smoothing of free vertices, per step
 CURVE_RELAX_ADH = 0.03  # gentler smoothing of adhered (anchored) vertices
 RUFFLE_STD = 0.008      # membrane noise on free vertices, fraction of base_r
 AREA_GAIN = 0.5         # soft area conservation gain, per step
+AREA_W_ADH = 0.3        # share of the area correction on adhered vertices
+AREA_STEP_MAX = 0.015   # max radius change per step from area correction
 SHAPE_MODES = 0.34      # amplitude of the random rest-shape modes
 CONTACT_SURFACE = 0.92  # membranes conform at this fraction of the
                         # neighbour's local radius (contact inhibition)
@@ -201,7 +203,7 @@ def update_cell_physics(center: np.ndarray, vel: np.ndarray, r: np.ndarray,
     #    every adhesion adds drag (a fully stuck resting cell barely moves).
     #    Signalling activity boosts contractility, so an activated cell
     #    translates its protrusions into motion much more effectively.
-    tr = TRACTION * (0.5 + 1.0 * drive)
+    tr = TRACTION * (0.9 + 0.6 * drive)
     fx = 0.0
     fy = 0.0
     n_adh = 0.0
@@ -269,15 +271,23 @@ def update_cell_physics(center: np.ndarray, vel: np.ndarray, r: np.ndarray,
             # rest, so only fresh protrusions keep a cell moving
             r[i] += CURVE_RELAX_ADH * lap + CREEP * dt * (rest[i] - r[i])
 
-    # 7. soft area conservation, carried by the free vertices only (the
-    #    adhered ones are anchored); then keep radii in a sane band
+    # 7. soft area conservation, spread over the whole outline (mostly the
+    #    free vertices, a little on the anchored ones) and capped per step:
+    #    dumping it on the few free vertices made a vertex that had just
+    #    let go snap inward. Then keep radii in a sane band
     verts = calculate_vertices(center, angles, r)
     area = polygon_area(verts)
     if area > 0.0:
-        corr = AREA_GAIN * (area0 - area) / area0
+        target = AREA_GAIN * (area0 - area) / area0   # relative area change
+        wsum = 0.0
         for i in range(n):
-            if adh[i] <= 0.0:
-                r[i] *= 1.0 + corr
+            wsum += 1.0 if adh[i] <= 0.0 else AREA_W_ADH
+        # scaling radius i by (1 + f_i) changes the area by ~2 f_i / n
+        k = target * n / (2.0 * wsum)
+        for i in range(n):
+            wi = 1.0 if adh[i] <= 0.0 else AREA_W_ADH
+            fi = min(max(k * wi, -AREA_STEP_MAX), AREA_STEP_MAX)
+            r[i] *= 1.0 + fi
     for i in range(n):
         r[i] = min(max(r[i], 0.5 * base_r), 2.2 * base_r)
 

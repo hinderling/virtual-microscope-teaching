@@ -24,7 +24,8 @@ fills, so cells read as 3D objects rather than drawings:
 * per-cell **expression** levels per fluorophore (lognormal-like, kept in
   a band that segmentation copes with). No photobleaching: the sample is
   meant to run indefinitely without a reset.
-* **retraction fibres** behind stretched, adhered tails, and a little
+* **retraction fibres** left behind where a stretched tail ripped off
+  the substrate (tethers to the retreating cell), and a little
   static **debris** on the substrate (phase contrast only).
 
 Channels (mode):
@@ -275,12 +276,16 @@ class CellRenderer:
                        else np.asarray(debris, float))
         self._debris_shapes = None
         self.last_visible: list = []
+        self.fibres = (np.zeros((0, 2)), np.zeros(0, int), np.zeros(0))
+        # periodic noise tile (Gaussian filter in Fourier space), so it can
+        # be indexed with wrap-around without seams
         rng = np.random.default_rng(4242)
         n = int(_TEX_UM * _TEX_PX_PER_UM)
-        tile = cv2.GaussianBlur(rng.standard_normal((n, n)).astype(np.float32),
-                                (0, 0), 0.9 * _TEX_PX_PER_UM,
-                                borderType=cv2.BORDER_REFLECT)
-        self._tile = (tile - tile.mean()) / tile.std()
+        k = np.fft.fftfreq(n)
+        sig = 0.9 * _TEX_PX_PER_UM
+        g = np.exp(-2 * (np.pi * sig) ** 2 * (k[:, None] ** 2 + k[None, :] ** 2))
+        tile = np.real(np.fft.ifft2(np.fft.fft2(rng.standard_normal((n, n))) * g))
+        self._tile = ((tile - tile.mean()) / tile.std()).astype(np.float32)
         self._tile_cache: dict[float, np.ndarray] = {}
 
     # ── appearance helpers ──────────────────────────────────────────────
@@ -310,13 +315,18 @@ class CellRenderer:
             self._tile_cache[key] = tile
         return tile
 
-    def _texture(self, shape, cells_px, scale) -> np.ndarray:
-        """Per-frame texture field: the tile pasted over each cell's box."""
+    def _texture(self, shape, outlines, anchors, scale) -> np.ndarray:
+        """Per-frame texture field, pasted over each cell's box.
+
+        The pattern is anchored to ``anchors`` (cell or nucleus centres,
+        px) at a per-cell offset, so it moves rigidly with the cell instead
+        of shifting whenever the outline (and thus its box) changes.
+        """
         h, w = shape
         tex = np.zeros((h, w), np.float32)
         tile = self._texture_tile(scale)
         n = tile.shape[0]
-        for c, pts in cells_px:
+        for c, pts, a in zip(self.last_visible, outlines, anchors):
             x0 = max(0, int(pts[:, 0].min()) - 1)
             y0 = max(0, int(pts[:, 1].min()) - 1)
             x1 = min(w, int(pts[:, 0].max()) + 2)
@@ -324,14 +334,9 @@ class CellRenderer:
             if x1 <= x0 or y1 <= y0:
                 continue
             ox, oy = (self.look(c).tex_off * n).astype(int)
-            # offset of the box's frame-clipped corner inside the cell box
-            bx = x0 - int(pts[:, 0].min()) + 1
-            by = y0 - int(pts[:, 1].min()) + 1
-            tx, ty = ox + max(0, bx), oy + max(0, by)
-            cw = min(x1 - x0, n - tx)
-            ch = min(y1 - y0, n - ty)
-            if cw > 0 and ch > 0:
-                tex[y0:y0 + ch, x0:x0 + cw] = tile[ty:ty + ch, tx:tx + cw]
+            ix = (np.arange(x0, x1) - int(round(a[0])) + ox) % n
+            iy = (np.arange(y0, y1) - int(round(a[1])) + oy) % n
+            tex[y0:y1, x0:x1] = tile[iy[:, None], ix[None, :]]
         return tex
 
     # ── geometry ────────────────────────────────────────────────────────
@@ -381,31 +386,35 @@ class CellRenderer:
             img[:] = np.clip(blur(img.astype(np.float32),
                                   self.WALL_BLUR_UM * scale), 0, 255)
 
-    def _fibres(self, c, center_px, scale):
-        """Retraction fibres: thin membrane tethers behind a stretched,
-        adhered tail, as (p0, p1) float segments in output px."""
-        adh = getattr(c, "adhesion", None)
-        rest = getattr(c, "rest_r", None)
-        m = getattr(c, "motion", None)
-        if adh is None or rest is None or m is None:
-            return []
-        speed = float(np.hypot(m[0], m[1]))
-        if speed < 0.15:
-            return []
-        back = np.arctan2(-m[1], -m[0])
-        out = []
-        for v in np.flatnonzero(adh > 0):
-            stretch = (c.r[v] - rest[v]) / rest[v]
-            if stretch < 0.25 or np.cos(c.angles[v] - back) < 0.6:
+    def _fibre_canvas(self, cells, origin, scale, shape) -> np.ndarray:
+        """Retraction fibres: thin membrane tethers from where a rear
+        adhesion ripped off (a fixed point on the substrate, with a small
+        membrane remnant) to the nearest point of the retreating cell.
+        They trail behind the cell's path and fade with age."""
+        h, w = shape
+        xy, idx, age = self.fibres
+        canvas = np.zeros((h, w), np.uint8)
+        if not len(xy):
+            return canvas.astype(np.float32)
+        ox, oy = origin
+        width = max(1, int(round(0.5 * scale)))
+        rem = max(1, int(round(0.8 * scale * 4)))
+        for (ax, ay), i, a in zip(xy, idx, age):
+            px, py = (ax - ox) * scale, (ay - oy) * scale
+            if not (-40 * scale < px < w + 40 * scale
+                    and -40 * scale < py < h + 40 * scale):
                 continue
-            a = c.angles[v]
-            r0 = c.r[v] * scale
-            length = (4.0 + 12.0 * min(stretch, 1.0)) * scale
-            p0 = center_px + r0 * np.array([np.cos(a), np.sin(a)])
-            for da in (-0.12, 0.1):
-                p1 = p0 + length * np.array([np.cos(a + da), np.sin(a + da)])
-                out.append((p0, p1))
-        return out
+            c = cells[i]
+            vx = c.center[0] + c.r * np.cos(c.angles)
+            vy = c.center[1] + c.r * np.sin(c.angles)
+            k = int(np.argmin((vx - ax) ** 2 + (vy - ay) ** 2))
+            qx, qy = (vx[k] - ox) * scale, (vy[k] - oy) * scale
+            val = int(round(255 * (1.0 - a)))
+            p0 = (int(round(px * 4)), int(round(py * 4)))
+            cv2.line(canvas, p0, (int(round(qx * 4)), int(round(qy * 4))),
+                     val, width, lineType=cv2.LINE_AA, shift=2)
+            cv2.circle(canvas, p0, rem, val, -1, lineType=cv2.LINE_AA, shift=2)
+        return canvas.astype(np.float32) / 255.0
 
     # ── drawing ─────────────────────────────────────────────────────────
 
@@ -478,7 +487,7 @@ class CellRenderer:
             nd = nucleus_fields(expr(1) / _EXPR_MAX) * _EXPR_MAX
             if not vis:
                 return np.full((h, w), self.FLUO_BG, np.uint8)
-            tex = self._texture(shape, list(zip(self.last_visible, nuclei)), scale) if use_tex else 0.0
+            tex = self._texture(shape, nuclei, ncent, scale) if use_tex else 0.0
             sig = self.H2B * nd * (1.0 - 0.3 * nucleoli()) * (1.0 + 0.10 * tex)
             return np.clip(self.FLUO_BG + sig, 0, 255).astype(np.uint8)
 
@@ -497,21 +506,18 @@ class CellRenderer:
                               thick, lineType=cv2.LINE_AA)
             golgi = np.zeros((h, w), np.uint8)
             for c, lk, a, ev in zip(self.last_visible, looks, ncent, e):
-                pol = float(c.polarity[0]) if hasattr(c, "polarity") else 0.0
+                gd = getattr(c, "golgi_dir", None)
+                if gd is None:
+                    pol = float(c.polarity[0]) if hasattr(c, "polarity") else 0.0
+                    gd = (np.cos(pol), np.sin(pol))
                 d = lk.golgi * c.base_r * scale
-                g = a + d * np.array([np.cos(pol), np.sin(pol)])
+                g = a + d * np.asarray(gd)
                 cv2.circle(golgi, (int(round(g[0] * 4)), int(round(g[1] * 4))),
                            int(round(0.22 * c.base_r * scale * 4)),
                            int(round(ev * 255)), -1, lineType=cv2.LINE_AA,
                            shift=2)
-            fib = np.zeros((h, w), np.uint8)
-            for c, p in vis:
-                for p0, p1 in self._fibres(c, p, scale):
-                    cv2.line(fib, tuple(np.rint(p0 * 4).astype(int)),
-                             tuple(np.rint(p1 * 4).astype(int)), 255,
-                             max(1, int(round(0.5 * scale))),
-                             lineType=cv2.LINE_AA, shift=2)
-            tex = self._texture(shape, list(zip(self.last_visible, bodies)), scale) if use_tex else 0.0
+            fib_f = self._fibre_canvas(cells, origin, scale, shape)
+            tex = self._texture(shape, bodies, [p for _, p in vis], scale) if use_tex else 0.0
             fill_f = fill.astype(f) / 255.0 * _EXPR_MAX
             vesicles = np.clip(tex - 1.8, 0.0, None) * fill_f
             sig = (0.30 * fill_f
@@ -519,7 +525,7 @@ class CellRenderer:
                    + 0.45 * blur(golgi.astype(f) / 255.0, 0.8 * scale)
                    * _EXPR_MAX * (1.0 + 0.5 * tex)
                    + 0.35 * vesicles
-                   + 0.35 * fib.astype(f) / 255.0)
+                   + 0.35 * fib_f)
             return np.clip(self.FLUO_BG + self.MEMBRANE * sig, 0, 255).astype(np.uint8)
 
         if mode == 4:      # mScarlet: ERK-KTR translocation reporter
@@ -539,7 +545,7 @@ class CellRenderer:
             _paint(nd, nuc_i, 0.8 * nuc_lv / vmax, bins=64)
             _paint(nd, _scaled(nuclei, ncent, 0.6), nuc_lv / vmax, bins=64)
             nd_f = blur(nd.astype(f), 0.9 * scale)
-            tex = self._texture(shape, list(zip(self.last_visible, bodies)), scale) if use_tex else 0.0
+            tex = self._texture(shape, bodies, [p for _, p in vis], scale) if use_tex else 0.0
             sig = (cyto.astype(f) * (0.45 + 0.55 * T) * (1.0 - 0.85 * np.minimum(nmask, 1.0))
                    + nd_f * (1.0 - 0.35 * nucleoli())) * (1.0 + 0.06 * tex)
             return np.clip(self.FLUO_BG + sig, 0, 255).astype(np.uint8)
@@ -566,16 +572,9 @@ class CellRenderer:
             mask_f = blur(mask.astype(f) / 255.0, 0.4 * scale)
             nm = nucleus_fields(np.ones(len(vis)))
             nm = np.minimum(nm, 1.0)
-            tex = self._texture(shape, list(zip(self.last_visible, bodies)), scale) if use_tex else 0.0
+            tex = self._texture(shape, bodies, [p for _, p in vis], scale) if use_tex else 0.0
             granules = np.clip(tex - 1.0, 0.0, None) * T * T * (1.0 - nm)
-            fib = np.zeros((h, w), np.uint8)
-            for c, p in vis:
-                for p0, p1 in self._fibres(c, p, scale):
-                    cv2.line(fib, tuple(np.rint(p0 * 4).astype(int)),
-                             tuple(np.rint(p1 * 4).astype(int)), 255,
-                             max(1, int(round(0.5 * scale))),
-                             lineType=cv2.LINE_AA, shift=2)
-            fib_f = fib.astype(f) / 255.0
+            fib_f = self._fibre_canvas(cells, origin, scale, shape)
             img += (-self.PHASE_THICK * T
                     + self.PHASE_NUC_LIGHT * nm
                     - self.PHASE_NUCLEOLUS * nucleoli()

@@ -260,6 +260,12 @@ class OptoCellSim:
         self.motions = np.zeros((n, 2))
         self.drives = np.zeros(n)
         self._pushes = np.zeros((n, 2))
+        self.golgi_dirs = np.zeros((n, 2))
+        self.fibre_xy = np.zeros((0, 2))
+        self.fibre_cell = np.zeros(0, dtype=int)
+        self.fibre_age = np.zeros(0)
+        self.fibre_cooldown = np.zeros(n)
+        self.renderer.fibres = (self.fibre_xy, self.fibre_cell, self.fibre_age)
         n_fronts = len(self._cells[0].front_ttl)
         self.front_angs = np.zeros((n, n_fronts))
         self.front_ttls = np.zeros((n, n_fronts))
@@ -287,12 +293,58 @@ class OptoCellSim:
             c.motion = self.motions[i]
             c.front_ang = self.front_angs[i]
             c.front_ttl = self.front_ttls[i]
+            self.golgi_dirs[i] = (np.cos(c.polarity[0]), np.sin(c.polarity[0]))
+            c.golgi_dir = self.golgi_dirs[i]
             c.angles = self.angles
 
     # ── physics ─────────────────────────────────────────────────────────
 
+    # retraction fibres: tethers left behind where a stretched rear
+    # adhesion ripped off (world anchor + owning cell + age)
+    FIBRE_LIFE = 8.0        # s until a tether has faded away
+    FIBRE_MAX_UM = 22.0     # a tether snaps once the membrane is this far
+    FIBRE_COOLDOWN = 1.5    # s between tethers of the same cell
+
+    def _update_fibres(self, adh_before: np.ndarray, dt: float) -> None:
+        """Leave a tether where the rear-most adhesion of a moving cell lets
+        go (at most one per cell per FIBRE_COOLDOWN); age and prune the
+        existing ones (vectorized). The anchor stays on the substrate, so
+        as the cell moves on the tether trails behind along its path."""
+        self.fibre_age += dt
+        self.fibre_cooldown -= dt
+        speed = np.hypot(self.motions[:, 0], self.motions[:, 1])
+        back = np.arctan2(-self.motions[:, 1], -self.motions[:, 0])
+        rear = np.cos(self.angles[None, :] - back[:, None])
+        new = ((adh_before > 0) & (self.adhesions <= 0) & (rear > 0.8)
+               & (speed[:, None] > 0.3) & (self.fibre_cooldown[:, None] <= 0))
+        ci = np.flatnonzero(new.any(axis=1))
+        if len(ci):
+            # the most rear-facing released vertex of each such cell
+            vi = np.argmax(np.where(new[ci], rear[ci], -2.0), axis=1)
+            a = self.angles[vi]
+            pts = self.centers[ci] + self.radii[ci, vi, None] * np.column_stack(
+                [np.cos(a), np.sin(a)])
+            self.fibre_xy = np.vstack([self.fibre_xy, pts])
+            self.fibre_cell = np.concatenate([self.fibre_cell, ci])
+            self.fibre_age = np.concatenate([self.fibre_age, np.zeros(len(ci))])
+            self.fibre_cooldown[ci] = self.FIBRE_COOLDOWN
+        if len(self.fibre_age):
+            # distance from each anchor to its cell's membrane (nearest vertex)
+            c = self.fibre_cell
+            vx = self.centers[c, 0, None] + self.radii[c] * np.cos(self.angles)
+            vy = self.centers[c, 1, None] + self.radii[c] * np.sin(self.angles)
+            d = np.hypot(vx - self.fibre_xy[:, :1], vy - self.fibre_xy[:, 1:]).min(1)
+            keep = (self.fibre_age < self.FIBRE_LIFE) & (d < self.FIBRE_MAX_UM)
+            if not keep.all():
+                self.fibre_xy = self.fibre_xy[keep]
+                self.fibre_cell = self.fibre_cell[keep]
+                self.fibre_age = self.fibre_age[keep]
+        self.renderer.fibres = (self.fibre_xy, self.fibre_cell,
+                                self.fibre_age / self.FIBRE_LIFE)
+
     def step(self, dt: float = 0.05) -> None:
         """Advance all cells by *dt* (deterministic given _step_count)."""
+        adh_before = self.adhesions.copy()
         update_all_cells_parallel(
             self.centers, self.velocities, self.radii, self.rest_radii,
             self.adhesions, self.polarities, self.motions, self.front_angs,
@@ -313,6 +365,13 @@ class OptoCellSim:
         # signalling state -> next step's protrusion drive (recently pulsed
         # cells protrude more, and sharply toward where the light pointed
         # them; the drive fades within seconds once the pulses stop)
+        # the Golgi sits in front of the nucleus along a slowly smoothed
+        # polarity (the raw polarity random-walks far too fast for it)
+        u = np.column_stack([np.cos(self.polarities), np.sin(self.polarities)])
+        self.golgi_dirs += (u - self.golgi_dirs) * min(1.0, dt / 40.0)
+        self.golgi_dirs /= np.maximum(
+            np.hypot(self.golgi_dirs[:, 0], self.golgi_dirs[:, 1]), 1e-9)[:, None]
+        self._update_fibres(adh_before, dt)
         for i, c in enumerate(self._cells):
             c.update_activity(dt)
             self.drives[i] = c.motility
