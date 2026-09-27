@@ -8,7 +8,8 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 
-from vmteach import load_microscope, advance, overlay
+from vmteach import load_microscope, advance
+from vmteach.analysis import overlay
 
 # %%
 # Load the virtual microscope.

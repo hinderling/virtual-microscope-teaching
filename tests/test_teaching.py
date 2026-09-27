@@ -4,7 +4,8 @@ import cv2
 import numpy as np
 import pytest
 
-from vmteach import load_microscope, advance, overlay, letter_mask
+from vmteach import load_microscope, advance
+from vmteach.analysis import overlay, letter_mask
 
 
 @pytest.fixture(scope="module")
@@ -351,7 +352,7 @@ def test_slm_follows_objective_magnification(scope):
     core.setStateLabel("Objective", "40x")
     core.setConfig("Channel", "miRFP")
     core.snapImage()
-    from vmteach import detect_nuclei
+    from vmteach.analysis import detect_nuclei
     # keep border-clipped nuclei: at 40x most of the few visible nuclei
     # touch the frame edge, and a clipped centroid still lands on the cell
     nuclei = detect_nuclei(core.getImage(), exclude_border=False)
@@ -466,7 +467,8 @@ def test_ktr_reporter_shows_activation_and_reverses(scope):
     5 s and reverse within 20 s. No timelapse, no tracking."""
     import numpy as np
 
-    from vmteach import advance, detect_nuclei, measure_activity
+    from vmteach import advance
+    from vmteach.analysis import detect_nuclei, measure_activity
 
     core, sim = scope
     sim.reset()
@@ -476,9 +478,10 @@ def test_ktr_reporter_shows_activation_and_reverses(scope):
         core.snapImage()
         return core.getImage()
 
-    cells = detect_nuclei(snap("miRFP"))
+    nuc = snap("miRFP")
+    cells = detect_nuclei(nuc)
     assert len(cells) >= 5
-    before = measure_activity(snap("mScarlet"), cells)
+    before = measure_activity(snap("mScarlet"), nuc, cells)
     assert all(a < 0.2 for a in before), before
 
     # stimulate only the left half of the field
@@ -489,16 +492,18 @@ def test_ktr_reporter_shows_activation_and_reverses(scope):
     core.setSLMImage(np.zeros((512, 512), np.uint8))
     advance(sim, 5)                     # rise time
 
-    cells1 = detect_nuclei(snap("miRFP"))
-    act = measure_activity(snap("mScarlet"), cells1)
+    nuc = snap("miRFP")
+    cells1 = detect_nuclei(nuc)
+    act = measure_activity(snap("mScarlet"), nuc, cells1)
     left = [a for (x, _), a in zip(cells1, act) if x < 236]
     right = [a for (x, _), a in zip(cells1, act) if x >= 276]
     assert left and all(a > 0.8 for a in left), left
     assert right and all(a < 0.2 for a in right), right
 
     advance(sim, 20)                    # full reversal
-    cells2 = detect_nuclei(snap("miRFP"))
-    after = measure_activity(snap("mScarlet"), cells2)
+    nuc = snap("miRFP")
+    cells2 = detect_nuclei(nuc)
+    after = measure_activity(snap("mScarlet"), nuc, cells2)
     assert all(a < 0.2 for a in after), after
     core.setConfig("Channel", "phase-contrast")
 

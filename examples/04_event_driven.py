@@ -25,7 +25,8 @@ import cv2
 import numpy as np
 from useq import MDAEvent
 
-from vmteach import detect_nuclei, load_microscope
+from vmteach import load_microscope
+from vmteach.analysis import detect_nuclei
 
 # Real-time mode: the MDA engine paces acquisition by wall clock
 # (min_start_time), and the sample evolves in wall clock, like on

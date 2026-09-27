@@ -20,7 +20,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 
-from vmteach import advance, detect_nuclei, load_microscope, measure_activity
+from vmteach import advance, load_microscope
+from vmteach.analysis import detect_nuclei, measure_activity
 
 core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
 
@@ -38,7 +39,9 @@ def snap(channel: str) -> np.ndarray:
 nuclei_img = snap("miRFP")
 cells = detect_nuclei(nuclei_img)
 ktr_before = snap("mScarlet")
-activity_before = measure_activity(ktr_before, cells)
+# measure_activity: per-cell cytoplasm-to-nucleus (C/N) reporter ratio,
+# rescaled to 0 = resting, 1 = fully activated
+activity_before = measure_activity(ktr_before, nuclei_img, cells)
 print(f"{len(cells)} cells, "
       f"{sum(a > 0.5 for a in activity_before)} active before stimulation")
 
@@ -68,7 +71,7 @@ advance(sim, 5)
 # 4. IMAGE again: same field, same channel. Stimulated cells now show a
 #    dark nucleus (reporter exported to the cytoplasm).
 ktr_after = snap("mScarlet")
-activity_after = measure_activity(ktr_after, cells)
+activity_after = measure_activity(ktr_after, snap("miRFP"), cells)
 print(f"{sum(a > 0.5 for a in activity_after)} active after stimulation")
 
 fig, axes = plt.subplots(1, 3, figsize=(12, 4))
@@ -90,7 +93,9 @@ plt.show()
 # 5. The response is reversible: with the light off, the reporter
 #    returns to the nucleus within ~20 seconds.
 advance(sim, 20)
-activity_later = measure_activity(snap("mScarlet"), detect_nuclei(snap("miRFP")))
+nuclei_img = snap("miRFP")
+activity_later = measure_activity(snap("mScarlet"), nuclei_img,
+                                  detect_nuclei(nuclei_img))
 print(f"{sum(a > 0.5 for a in activity_later)} active 20 s later")
 
 # %%

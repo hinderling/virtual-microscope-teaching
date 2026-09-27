@@ -30,7 +30,8 @@ Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no Micro-Mana
 
 ```python
 import cv2, numpy as np
-from vmteach import load_microscope, advance, detect_nuclei
+from vmteach import load_microscope, advance
+from vmteach.analysis import detect_nuclei
 
 core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
 
@@ -102,22 +103,42 @@ A backend is a factory returning a sim object that implements the small bridge c
 2. **Stepped mode (default)**: simulated time advances only via `advance(sim, seconds=...)`. Same seed + same loop = identical result on every machine.
 3. **Real-time mode**, `load_microscope(..., mode="realtime")`: the sample evolves in wall-clock time *while your code runs*, like on a real microscope. Your analysis latency becomes part of the experiment.
 
+## How it relates to pymmcore-plus
+
+The virtual microscope *is* a pymmcore-plus microscope; only the devices behind it are simulated:
+
+1. `core` is a `UniMMCore`, the pymmcore-plus core that also accepts devices written in Python. Every hardware call your script makes (`snapImage`, `setConfig`, `setXYPosition`, `setPosition` for focus, `setSLMImage`, MDA) is the standard pymmcore-plus API.
+2. [`optogenetic.cfg`](src/vmteach/optogenetic.cfg) is a normal Micro-Manager configuration (channel presets, pixel sizes per objective, startup state), except that its device lines load Python device classes instead of C++ device adapters.
+3. The device classes in `vmteach/devices/` implement the pymmcore-plus device interfaces (camera, XY and Z stage, state devices, shutter, SLM). They contain no simulation logic and forward to a small bridge.
+4. The bridge drives the simulated sample (the *backend*). Backend methods such as `set_focal_plane(z)` are internal: they are how the simulated Z stage tells the sample where the focal plane is, never something your script calls.
+
+Moving a script to a real microscope therefore changes little: replace `load_microscope(...)` with `CMMCorePlus()` + `loadSystemConfiguration("your_scope.cfg")`, make the channel and device names match your configuration, and wait with `time.sleep` (or the MDA engine) instead of `advance`. Real systems additionally need a calibrated camera-to-SLM mapping, an SLM of their own size (`core.getSLMWidth()`), and thresholds suited to their camera's bit depth.
+
 ## API
+
+The top-level `vmteach` namespace is the simulator:
 
 | Function | Purpose |
 |---|---|
 | `load_microscope(backend, n_cells, seed, mode)` | Create the microscope → `(core, sim)` |
 | `register_backend(name, factory)` | Register a new simulated sample |
-| `advance(sim, seconds)` | Advance simulated time (stepped mode) |
-| `detect_nuclei(img)` | Reference detector: nuclei centroids from the `miRFP` channel |
-| `measure_activity(ktr_img, centroids)` | Per-cell pathway activity (0 to 1) from the `mScarlet` channel |
+| `advance(sim, seconds)` | Advance simulated time (stepped mode only; on hardware you simply wait) |
+| `sim.reset(seed)` | Restore the initial sample, for bit-identical reruns |
+
+`core` is a full `pymmcore-plus` core: stage (`setXYPosition`), focus (`setPosition`), objectives (`setState("Objective", ...)`), the five channels above, exposure, binning, SLM.
+
+`vmteach.analysis` holds reference image-analysis helpers for the exercises. They take plain images and work the same on frames from real hardware:
+
+| Function | Purpose |
+|---|---|
+| `detect_nuclei(img)` | Nuclei centroids from a nuclear-marker image (Otsu + contours) |
+| `cn_ratio(ktr_img, nuclei_img, centroids)` | Cytoplasm-to-nucleus ratio of a translocation reporter, per cell |
+| `measure_activity(ktr_img, nuclei_img, centroids)` | C/N ratio rescaled to pathway activity (0 to 1); calibrate `lo`/`hi` on real data |
 | `link_tracks(detections)` | Link per-frame detections into tracks (Hungarian assignment) |
 | `overlay(img, mask)` | RGB visualization of a stimulation mask on an image |
 | `letter_mask(char)` | Binary letter target for the assembly exercise |
-| `vmteach.gui.launch_gui(core)` | napari + micro-manager control widgets on the core |
-| `vmteach.gui.show_results(images, ...)` | Explore a finished experiment as napari layers |
 
-`core` is a full `pymmcore-plus` core: stage (`setXYPosition`), objectives (`setState("Objective", ...)`), the five channels above, exposure, binning, SLM.
+`vmteach.gui` adds the napari front end: `launch_gui(core)` (napari + micro-manager control widgets on the core) and `show_results(images, ...)` (explore a finished experiment as napari layers).
 
 ## Microscope geometry
 

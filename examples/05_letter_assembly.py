@@ -8,7 +8,8 @@ import numpy as np
 from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
 
-from vmteach import load_microscope, advance, letter_mask, overlay
+from vmteach import load_microscope, advance
+from vmteach.analysis import letter_mask, overlay
 
 # Smaller, more numerous cells + a fat letter: cells are solid objects that
 # keep a collision distance (~2 cell radii), so the stroke must fit them.

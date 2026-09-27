@@ -49,7 +49,7 @@ def show_results(images, masks=None, centroids=None, segmentations=None,
         masks: optional sequence of 2D stimulation masks (uint8/bool)
             → labels layer, so learners see *where* the light went.
         centroids: optional per-frame lists of (x, y) cell positions
-            → tracks layer (Hungarian-linked, see vmteach.link_tracks).
+            → tracks layer (Hungarian-linked, see vmteach.analysis.link_tracks).
         segmentations: optional sequence of 2D label images → labels layer.
         viewer: existing napari Viewer to add to (default: create one).
 
@@ -74,7 +74,7 @@ def show_results(images, masks=None, centroids=None, segmentations=None,
         except Exception:
             pass
     if centroids is not None:
-        from vmteach.teach import link_tracks
+        from vmteach.analysis import link_tracks
         tr = link_tracks(centroids)
         if len(tr):
             layer = viewer.add_tracks(tr, name=f"{name}: tracks",
