@@ -27,13 +27,17 @@ class RealtimeEngine:
             1.0 = real-time, 5.0 = 5x faster.
         tick_hz: Background ticks per second (controls step granularity).
         max_dt: Maximum sim-time per tick (prevents large jumps when
-            snap_frame blocks the engine thread). Default 1.0s sim-time.
+            snap_frame blocks the engine thread). Default 1.0s sim-time,
+            scaled with time_scale.
+        max_substep: Longest single physics step, sim seconds; each tick
+            is split into substeps no longer than this.
     """
 
     def __init__(self, sim, time_scale: float = 1.0, tick_hz: int = 10,
                  max_dt: float = 1.0, idle_timeout: float = 0.0,
-                 bridge=None):
+                 bridge=None, max_substep: float = 0.05):
         self._sim = sim
+        self._max_substep = max_substep
         self._time_scale = time_scale
         self._tick_hz = tick_hz
         self._max_dt = max_dt
@@ -97,15 +101,19 @@ class RealtimeEngine:
             self._thread = None
 
     def patch_snap_frame(self):
-        """Wrap sim.snap_frame() with the engine lock for thread safety."""
-        original = self._sim.snap_frame
+        """Wrap sim.snap_frame() and sim.reset() with the engine lock, so
+        rendering and restarting never overlap a physics step."""
         lock = self._lock
+        for name in ("snap_frame", "reset"):
+            original = getattr(self._sim, name, None)
+            if original is None:
+                continue
 
-        def locked_snap(*args, **kwargs):
-            with lock:
-                return original(*args, **kwargs)
+            def locked(*args, _original=original, **kwargs):
+                with lock:
+                    return _original(*args, **kwargs)
 
-        self._sim.snap_frame = locked_snap
+            setattr(self._sim, name, locked)
 
     def _run(self):
         """Background loop: call step(dt) at tick_hz."""
@@ -130,9 +138,16 @@ class RealtimeEngine:
             last = now
             # Cap dt to prevent huge jumps when snap_frame blocks the thread
             if self._max_dt > 0:
-                dt = min(dt, self._max_dt)
+                dt = min(dt, self._max_dt * max(1.0, self._time_scale))
+            if dt <= 0:
+                continue
+            # substeps of at most max_substep: a faster clock runs more
+            # physics steps, never longer ones, so the sample behaves the
+            # same at any speed
+            n = max(1, int(dt / self._max_substep + 0.999))
             with self._lock:
                 try:
-                    step_fn(dt)
+                    for _ in range(n):
+                        step_fn(dt / n)
                 except Exception:
                     logger.exception("RealtimeEngine step error")

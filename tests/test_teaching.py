@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from vmteach import load_microscope, advance
-from vmteach.analysis import overlay, letter_mask
+from vmteach.optogenetic import overlay, letter_mask
 
 
 @pytest.fixture(scope="module")
@@ -352,7 +352,7 @@ def test_slm_follows_objective_magnification(scope):
     core.setStateLabel("Objective", "40x")
     core.setConfig("Channel", "miRFP")
     core.snapImage()
-    from vmteach.analysis import detect_nuclei
+    from vmteach.optogenetic import detect_nuclei
     # keep border-clipped nuclei: at 40x most of the few visible nuclei
     # touch the frame edge, and a clipped centroid still lands on the cell
     nuclei = detect_nuclei(core.getImage(), exclude_border=False)
@@ -468,7 +468,7 @@ def test_ktr_reporter_shows_activation_and_reverses(scope):
     import numpy as np
 
     from vmteach import advance
-    from vmteach.analysis import detect_nuclei, measure_activity
+    from vmteach.optogenetic import detect_nuclei, measure_activity
 
     core, sim = scope
     sim.reset()
@@ -510,7 +510,7 @@ def test_ktr_reporter_shows_activation_and_reverses(scope):
 
 def test_well_grid_layouts():
     """n_wells accepts an (nx, ny) grid; geometry and limits follow."""
-    from vmteach.sim import OptoCellSim
+    from vmteach.optogenetic.sim import OptoCellSim
 
     sim = OptoCellSim(n_cells=2, n_wells=(2, 2), seed=0)
     assert sim.n_wells == 4 and len(sim.wells) == 4
@@ -524,3 +524,63 @@ def test_well_grid_layouts():
 
     row = OptoCellSim(n_cells=2, n_wells=2, seed=0)   # old int form
     assert row.n_wells == 2 and row.height < row.width
+
+
+def _stop_engine():
+    from vmteach.bridge import GLOBAL_BRIDGE
+    if GLOBAL_BRIDGE is not None and GLOBAL_BRIDGE._engine is not None:
+        GLOBAL_BRIDGE._engine.stop()
+
+
+def test_realtime_speed_runs_faster_with_short_steps():
+    """speed=N: N simulated seconds per wall second, split into physics
+    steps no longer than the stepped-mode dt."""
+    import time
+    core, sim = load_microscope("optogenetic", n_cells=5, seed=1,
+                                mode="realtime", speed=10, warmup=False)
+    t0, s0, n0 = time.monotonic(), sim.time, sim._step_count
+    time.sleep(1.0)
+    wall, simt = time.monotonic() - t0, sim.time - s0
+    steps = sim._step_count - n0
+    _stop_engine()
+    assert 6.0 < simt / wall < 12.0, f"speed-up {simt / wall:.1f}"
+    assert simt / max(1, steps) <= 0.0501, "physics steps got longer"
+    with pytest.raises(ValueError):
+        load_microscope("optogenetic", n_cells=5, speed=10, warmup=False)
+
+
+def test_run_experiment_stops_and_reraises():
+    import time
+    from vmteach import run_experiment
+
+    def loop(run):
+        i = 0
+        while not run.stop_requested:
+            run.sleep(0.05)
+            i += 1
+        return i
+
+    run = run_experiment(loop)
+    time.sleep(0.2)
+    assert run.running
+    run.stop()
+    assert run.wait(timeout=2) >= 1 and not run.running
+
+    def fails(run):
+        raise RuntimeError("boom")
+
+    run = run_experiment(fails)
+    with pytest.raises(RuntimeError):
+        run.wait(timeout=2)
+
+
+def test_reset_is_safe_while_realtime_engine_runs():
+    import time
+    core, sim = load_microscope("optogenetic", n_cells=5, seed=1,
+                                mode="realtime", speed=5, warmup=False)
+    for _ in range(5):
+        sim.reset()
+        time.sleep(0.05)
+        core.snapImage()
+    _stop_engine()
+    assert core.getImage().shape == (512, 512)

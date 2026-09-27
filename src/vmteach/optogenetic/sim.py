@@ -37,7 +37,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from vmteach.cells import (
+from vmteach.optogenetic.cells import (
     SIG_MOTILITY,
     OptogeneticCell,
     build_grid,
@@ -48,7 +48,7 @@ from vmteach.cells import (
     well_sdf,
 )
 from vmteach.optics import Optics
-from vmteach.render import CellRenderer
+from vmteach.optogenetic.render import CellRenderer
 
 # objective label -> camera pixel size in um (unbinned). 10x is the reference
 # (1 um/px); the same numbers are declared as pixel-size configs in
@@ -263,6 +263,7 @@ class OptoCellSim:
         self.motions = np.zeros((n, 2))
         self.drives = np.zeros(n)
         self._pushes = np.zeros((n, 2))
+        self.time = 0.0                 # simulated seconds since (re)start
         self.signals = np.zeros((n, 5))
         self._sig_rng = np.random.default_rng(self._seed + 500)
         self.golgi_dirs = np.zeros((n, 2))
@@ -351,6 +352,7 @@ class OptoCellSim:
 
     def step(self, dt: float = 0.05) -> None:
         """Advance all cells by *dt* (deterministic given _step_count)."""
+        self.time += dt
         adh_before = self.adhesions.copy()
         update_all_cells_parallel(
             self.centers, self.velocities, self.radii, self.rest_radii,

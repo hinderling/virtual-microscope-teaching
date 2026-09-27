@@ -1,6 +1,6 @@
 """Cell physics (numba) and the optogenetic cell.
 
-The population lives in flat arrays owned by :class:`vmteach.sim.OptoCellSim`
+The population lives in flat arrays owned by :class:`vmteach.optogenetic.sim.OptoCellSim`
 (``centers``, ``velocities``, ``radii``, ``adhesions``, ...); each
 :class:`OptogeneticCell` holds *views* into its own row, so physics,
 collisions, stimulation and rendering all see one copy of the state and

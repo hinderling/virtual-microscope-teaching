@@ -76,7 +76,7 @@ class SimCameraDevice(ReentrantLockMixin, CameraDevice):
     def _sensor_size(self) -> int:
         bridge = self._get_bridge()
         if bridge is None:
-            from vmteach.sim import SENSOR_SIZE
+            from vmteach.optogenetic.sim import SENSOR_SIZE
             return SENSOR_SIZE
         return bridge._sim.sensor_size
 

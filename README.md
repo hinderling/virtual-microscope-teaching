@@ -24,18 +24,20 @@ pip install "virtual-microscope-teaching[gui] @ git+https://github.com/hinderlin
 
 Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no Micro-Manager device adapters, no C++. Everything is pure Python.
 
-> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. A full 100-cycle feedback experiment runs in ~3 s.
+> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. In stepped mode a full 100-cycle feedback experiment computes in ~3 s.
 
 ## Quick start: a complete feedback experiment
 
 ```python
+import time
 import cv2, numpy as np
-from vmteach import load_microscope, advance
-from vmteach.analysis import detect_nuclei
+from vmteach import load_microscope
+from vmteach.optogenetic import detect_nuclei
 
-core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
+# realtime: the sample lives in wall-clock time, like on a real microscope
+core, sim = load_microscope("optogenetic", n_cells=20, seed=0, mode="realtime")
 
-for cycle in range(100):
+for cycle in range(60):
     # ACQUIRE the nuclei channel: identical calls on real hardware
     core.setConfig("Channel", "miRFP")
     core.snapImage()
@@ -55,13 +57,13 @@ for cycle in range(100):
     core.setSLMImage("SLM", mask)
     core.setConfig("Channel", "CyanStim")
 
-    # let the sample respond (deterministic simulated time)
-    advance(sim, seconds=1.0)
+    # let the sample respond: the same line on real hardware
+    time.sleep(1.0)
 ```
 
-The cell population migrates upward, steered by your loop. Snap the `phase-contrast` channel to look at it.
+Within the minute the cell population migrates upward, steered by your loop. Snap the `phase-contrast` channel to look at it, or [watch it live in napari](#napari-gui). Apart from the `load_microscope` line, this is the script you would run on a real microscope.
 
-More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → stimulate → image, with the ERK-KTR readout), `02_napari_gui.py` (GUI and script drive the same core), `03_feedback_loop.py` (the loop above, step by step, plus per-object decisions and timing), `04_event_driven.py` (the same experiment as declarative useq-schema events), `05_letter_assembly.py` (steer a dense population into the letter N).
+More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → stimulate → image, with the ERK-KTR readout), `02_napari_gui.py` (GUI and script drive the same core), `03_feedback_loop.py` (the loop above, step by step, plus per-object decisions and timing), `04_event_driven.py` (the same experiment as declarative useq-schema events), `05_letter_assembly.py` (steer a dense population into the letter N, with the simulation running 10x faster than real time). The examples run in real-time mode with napari-micromanager open, so every snap, channel switch and light pattern shows up live.
 
 ## The sample: the `optogenetic` backend
 
@@ -95,13 +97,14 @@ vmteach.register_backend("my_sample", MySim)   # MySim(**kwargs) -> sim object
 core, sim = vmteach.load_microscope("my_sample")
 ```
 
-A backend is a factory returning a sim object that implements the small bridge contract (`snap_frame()`, `step(dt)`, `reset(seed)`, `set_focal_plane(z)`, and the device-facing attributes used by `vmteach.bridge`). `vmteach.sim.OptoCellSim` is the reference implementation.
+A backend is a factory returning a sim object that implements the small bridge contract (`snap_frame()`, `step(dt)`, `reset(seed)`, `set_focal_plane(z)`, and the device-facing attributes used by `vmteach.bridge`). `vmteach.optogenetic.OptoCellSim` is the reference implementation; put a new backend in its own subpackage next to it, together with the analysis helpers for its readouts.
 
 ## Timing model (read this before designing experiments)
 
 1. **Stimulation is gated on the light path**: `setSLMImage` only *uploads* the pattern, because the SLM modulates light that is not on yet. Switching to the `CyanStim` channel engages the stimulation LED and delivers the pattern (an impulse that *sets* cell velocity toward the light); switching to an imaging channel turns it off. One delivery per loop iteration, so the feedback loop frequency is the stimulation frequency, as in pulsed optogenetic protocols. Leaving the light engaged while time advances does not stimulate again: delivery is an impulse at the delivery events (the light-on transition and snaps in `CyanStim`), which is deliberate pulsed-protocol behavior. Snapping in `CyanStim` images the projected light itself (mask–sample alignment check).
-2. **Stepped mode (default)**: simulated time advances only via `advance(sim, seconds=...)`. Same seed + same loop = identical result on every machine.
-3. **Real-time mode**, `load_microscope(..., mode="realtime")`: the sample evolves in wall-clock time *while your code runs*, like on a real microscope. Your analysis latency becomes part of the experiment.
+2. **Real-time mode**, `load_microscope(..., mode="realtime")`: the sample evolves in wall-clock time *while your code runs*, like on a real microscope. You wait with `time.sleep`, and your analysis latency becomes part of the experiment. This is what the examples use.
+3. **Faster than real time**, `load_microscope(..., mode="realtime", speed=10)`: the sample evolves 10x faster than the wall clock, so slow biology (cells migrating for minutes) can be tested in seconds. Shorten your waits by the same factor (`time.sleep(1.0 / speed)`) to keep the experiment's timing; physics still runs in steps of at most 0.05 s, so the cells behave the same at any speed. Only the simulator offers this: on a real microscope, the biology sets the pace. Note that your code's run time does *not* shrink, so at high speed it costs proportionally more sample time.
+4. **Stepped mode** (the `load_microscope` default): simulated time advances only via `advance(sim, seconds=...)`, never on its own. Same seed + same loop = identical result on every machine, which is what tests and figure scripts need. `sim.time` reports the simulated seconds in every mode.
 
 ## How it relates to pymmcore-plus
 
@@ -120,14 +123,15 @@ The top-level `vmteach` namespace is the simulator:
 
 | Function | Purpose |
 |---|---|
-| `load_microscope(backend, n_cells, seed, mode)` | Create the microscope → `(core, sim)` |
+| `load_microscope(backend, n_cells, seed, mode, speed)` | Create the microscope → `(core, sim)` |
 | `register_backend(name, factory)` | Register a new simulated sample |
 | `advance(sim, seconds)` | Advance simulated time (stepped mode only; on hardware you simply wait) |
+| `run_experiment(fn)` | Run an experiment loop in the background, returning a `Run` handle (`stop()`, `sleep()`, `wait()`); keeps notebook and GUI live |
 | `sim.reset(seed)` | Restore the initial sample, for bit-identical reruns |
 
 `core` is a full `pymmcore-plus` core: stage (`setXYPosition`), focus (`setPosition`), objectives (`setState("Objective", ...)`), the five channels above, exposure, binning, SLM.
 
-`vmteach.analysis` holds reference image-analysis helpers for the exercises. They take plain images and work the same on frames from real hardware:
+Each sample backend is a subpackage that also holds the analysis helpers for its readouts. `vmteach.optogenetic` (the simulated sample `OptoCellSim` plus reference analysis for its H2B and ERK-KTR labels) provides the helpers the exercises use. They take plain images, so they also run on a real sample labelled the same way:
 
 | Function | Purpose |
 |---|---|
@@ -160,10 +164,24 @@ Rendering draws only the cells and well outlines in the field, straight at the c
 ## napari GUI
 
 ```python
+from vmteach import load_microscope, run_experiment
 from vmteach.gui import launch_gui
+
 core, sim = load_microscope("optogenetic", mode="realtime")
 viewer = launch_gui(core)   # napari + micro-manager widgets on the virtual scope
+
+def experiment(run):        # your feedback loop, unchanged
+    for cycle in range(60):
+        if run.stop_requested:
+            break
+        ...                  # acquire, analyze, decide, actuate
+        run.sleep(1.0)      # wait; returns early on run.stop()
+
+run = run_experiment(experiment)   # returns immediately; the viewer stays live
+run.wait()                         # later: block until done (re-raises errors)
 ```
+
+A plain `for` loop in a notebook cell would block the kernel, and with it the live viewer, until the loop ends. `run_experiment` runs the loop on a background thread instead (the same pattern as FARO's non-blocking `run_experiment`), so napari-micromanager shows every snap, channel switch and stimulation pattern while the experiment runs and the notebook stays usable. It only calls your function, so it drives a real microscope the same way. `run.wait()` keeps the GUI responsive when called from a plain script.
 
 ![napari-micromanager on the virtual microscope](docs/images/napari_gui.png)
 

@@ -14,7 +14,7 @@ import numpy as np
 from qtpy.QtCore import QTimer
 
 from vmteach import advance, load_microscope
-from vmteach.analysis import detect_nuclei
+from vmteach.optogenetic import detect_nuclei
 from vmteach.gui import launch_gui, show_results
 
 OUT = "docs/images"

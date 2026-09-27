@@ -10,7 +10,7 @@
 # widget issues the same pymmcore API calls your scripts make. That
 # equivalence is the point of this example.
 
-from vmteach import load_microscope, advance
+from vmteach import load_microscope
 from vmteach.gui import launch_gui
 
 # Real-time mode: the sample keeps moving in wall-clock time, so the
@@ -52,4 +52,6 @@ core.setExposure(50.0)
 # %%
 # While a feedback loop runs, every core.snapImage() lands in the same
 # preview layer, so you can watch your smart acquisition script "click"
-# through the experiment live. Try running example 01 with this GUI open.
+# through the experiment live. The other examples open this GUI themselves
+# and run their loops with vmteach.run_experiment, which keeps the viewer
+# live while the loop runs in the background.

@@ -1,12 +1,12 @@
-"""Image-analysis helpers for the course exercises.
+"""Image-analysis helpers for the ``optogenetic`` sample's readouts.
 
-None of this is microscope API: these functions take plain images and
-work the same on frames from the virtual microscope and from real
-hardware. They are reference implementations to compare your own
-pipeline against, kept separate from the simulator itself
-(:mod:`vmteach`).
+Reference implementations for the course exercises, tailored to this
+sample's labels (H2B nuclei, ERK-KTR reporter). None of this is
+microscope API: the functions take plain images, so they run the same
+on frames from the virtual microscope and on a real sample labelled the
+same way.
 
-    from vmteach.analysis import detect_nuclei, measure_activity
+    from vmteach.optogenetic import detect_nuclei, measure_activity
 """
 
 from __future__ import annotations

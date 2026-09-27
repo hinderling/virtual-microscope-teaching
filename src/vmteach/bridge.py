@@ -25,7 +25,7 @@ def set_global_bridge(bridge: "SimulationBridge") -> None:
 
 
 class SimulationBridge:
-    """Routes device calls to an :class:`vmteach.sim.OptoCellSim`."""
+    """Routes device calls to an :class:`vmteach.optogenetic.sim.OptoCellSim`."""
 
     def __init__(self, sim):
         self._sim = sim
@@ -101,5 +101,5 @@ class SimulationBridge:
     def get_slm_mask(self) -> np.ndarray:
         if self._current_slm_mask is not None:
             return self._current_slm_mask
-        from vmteach.sim import SLM_SHAPE
+        from vmteach.optogenetic.sim import SLM_SHAPE
         return np.zeros(SLM_SHAPE, dtype=np.uint8)

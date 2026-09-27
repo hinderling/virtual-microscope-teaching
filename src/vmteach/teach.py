@@ -1,6 +1,7 @@
 """Simulator control: load the virtual microscope, register sample
-backends, advance simulated time. Image-analysis helpers for the course
-live in :mod:`vmteach.analysis`.
+backends, advance simulated time. Each sample backend lives in its own
+subpackage together with the analysis helpers for its readouts (the
+shipped one: :mod:`vmteach.optogenetic`).
 
 Design notes
 ------------
@@ -25,7 +26,7 @@ from pathlib import Path
 
 
 def _make_opto_sim(**kwargs):
-    from vmteach.sim import OptoCellSim
+    from vmteach.optogenetic.sim import OptoCellSim
     return OptoCellSim(**kwargs)
 
 
@@ -43,14 +44,14 @@ def register_backend(name: str, factory) -> None:
 
     ``factory(**kwargs)`` must return a sim object satisfying the bridge
     contract (see :data:`BACKENDS`). The ``optogenetic`` backend's
-    :class:`vmteach.sim.OptoCellSim` is the reference implementation.
+    :class:`vmteach.optogenetic.sim.OptoCellSim` is the reference implementation.
     """
     BACKENDS[str(name)] = factory
 
 
 def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
-                    seed: int = 0, mode: str = "stepped", warmup: bool = True,
-                    **kwargs):
+                    seed: int = 0, mode: str = "stepped", speed: float = 1.0,
+                    warmup: bool = True, **kwargs):
     """Create a virtual microscope and return ``(core, sim)``.
 
     Args:
@@ -67,6 +68,12 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
             :func:`advance`; fully deterministic.
             ``"realtime"``: the sample evolves in wall-clock time while
             your code runs, like on a real microscope.
+        speed: Realtime mode only: how many times faster than the wall
+            clock the sample evolves. ``speed=10`` makes one second of
+            waiting cover ten seconds of cell behaviour, so slow biology
+            can be tested quickly; shorten your waits by the same factor
+            to keep the experiment's timing (a luxury real samples do not
+            offer).
         warmup: Pre-compile the physics (numba, cached on disk after the
             first ever run) so the first snap in the exercise is instant.
         **kwargs: Forwarded to the backend factory (for ``optogenetic``:
@@ -84,6 +91,11 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
             "vmteach.register_backend(name, factory).")
     if mode not in ("stepped", "realtime"):
         raise ValueError(f"mode must be 'stepped' or 'realtime', got {mode!r}")
+    if speed <= 0:
+        raise ValueError(f"speed must be > 0, got {speed!r}")
+    if speed != 1.0 and mode != "realtime":
+        raise ValueError("speed only applies to mode='realtime'; in stepped "
+                         "mode, advance() sets the pace")
 
     from vmteach.bridge import SimulationBridge, set_global_bridge
 
@@ -122,7 +134,7 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
 
     if mode == "realtime":
         from vmteach.engine import RealtimeEngine
-        engine = RealtimeEngine(sim, time_scale=1.0, tick_hz=20,
+        engine = RealtimeEngine(sim, time_scale=float(speed), tick_hz=20,
                                 idle_timeout=0.0, bridge=bridge)
         engine.patch_snap_frame()
         engine.start()

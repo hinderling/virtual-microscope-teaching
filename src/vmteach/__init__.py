@@ -14,10 +14,12 @@ The top-level namespace is the simulator itself:
     img = core.getImage()
     core.setSLMImage("SLM", mask)   # upload pattern, identical on real hardware
 
-Image-analysis reference helpers (hardware-agnostic) live in
-:mod:`vmteach.analysis`; the napari GUI in :mod:`vmteach.gui`.
+Each sample backend is a subpackage with the analysis helpers for its
+readouts (the shipped one: :mod:`vmteach.optogenetic`); the napari GUI
+lives in :mod:`vmteach.gui`.
 """
 
+from vmteach.runner import Run, run_experiment
 from vmteach.teach import (
     load_microscope,
     register_backend,
@@ -30,6 +32,8 @@ __all__ = [
     "register_backend",
     "BACKENDS",
     "advance",
+    "run_experiment",
+    "Run",
 ]
 
 __version__ = "0.1.0"

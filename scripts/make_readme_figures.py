@@ -16,7 +16,7 @@ import cv2
 import numpy as np
 
 from vmteach import advance, load_microscope
-from vmteach.sim import OptoCellSim
+from vmteach.optogenetic.sim import OptoCellSim
 
 OUT = sys.argv[1] if len(sys.argv) > 1 else "docs/images"
 

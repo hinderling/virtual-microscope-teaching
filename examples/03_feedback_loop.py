@@ -1,23 +1,27 @@
 # %%
 # Closed-loop feedback photomanipulation on a virtual microscope
 #
-# Install (once): pip install virtual-microscope-teaching
-# Runs locally, Python >= 3.10.
+# Install (once): pip install "virtual-microscope-teaching[gui]"
+# Run it cell by cell in Jupyter (or VS Code), or as a plain script.
+
+import time
 
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 
-from vmteach import load_microscope, advance
-from vmteach.analysis import overlay
+from vmteach import load_microscope, run_experiment
+from vmteach.gui import launch_gui
+from vmteach.optogenetic import overlay
 
 # %%
-# Load the virtual microscope.
+# Load the virtual microscope in real-time mode and open the GUI.
 # `core` is a pymmcore-plus object; the same API controls real microscopes.
-# `sim` is a handle to the simulation (used only to advance time and reset).
-# The microscope starts in deterministic "stepped" mode: the sample only
-# evolves when we call advance(), so everyone gets the same result.
-core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
+# `sim` is a handle to the simulation (only used here to restart it).
+# The sample evolves in wall-clock time, like live cells on a real
+# microscope, and napari-micromanager shows every snap as it happens.
+core, sim = load_microscope("optogenetic", n_cells=20, seed=0, mode="realtime")
+viewer = launch_gui(core)
 
 print("Channels:", core.getAvailableConfigs("Channel"))
 
@@ -118,29 +122,38 @@ for ax in axes:
 core.setConfig("Channel", "phase-contrast")
 
 # %%
-# CLOSE THE LOOP: acquire → analyze → decide → actuate → let time pass → repeat.
+# CLOSE THE LOOP: acquire → analyze → decide → actuate → wait → repeat.
 # Note the light choreography each cycle: switching to miRFP for the
 # acquisition turns the stimulation light OFF; after uploading the new mask,
 # switching to CyanStim turns it back ON. Forget the switch and nothing
 # happens, which is a classic debugging moment at a real microscope.
-# advance(sim, seconds=1.0) advances the simulation deterministically;
-# on real hardware this would simply be the interval between acquisitions.
+# The loop runs in the background (run_experiment), so the viewer stays
+# live: watch the spots follow the cells as the population moves up.
+# run.sleep(1.0) is the interval between cycles, as on real hardware.
 
-n_cycles = 100
-history = []
+n_cycles = 60                                   # one minute
+
+
+def steer_up(run):
+    history = []
+    for i in range(n_cycles):
+        if run.stop_requested:                  # run.stop() ends it early
+            break
+        core.setConfig("Channel", "miRFP")       # light off, imaging channel
+        core.snapImage()
+        img = core.getImage()                   # acquire
+        cells = detect_cells(img)               # analyze
+        mask = build_steer_mask(cells)          # decide
+        core.setSLMImage("SLM", mask)           # upload pattern
+        core.setConfig("Channel", "CyanStim")   # light on: deliver
+        history.append(np.array([(cx, cy) for cx, cy, _ in cells]))
+        run.sleep(1.0)                          # the sample responds
+    core.setConfig("Channel", "phase-contrast")
+    return history
+
 
 sim.reset()
-for i in range(n_cycles):
-    core.setConfig("Channel", "miRFP")           # light off, imaging channel
-    core.snapImage()
-    img = core.getImage()                       # acquire
-    cells = detect_cells(img)                   # analyze
-    mask = build_steer_mask(cells)              # decide
-    core.setSLMImage("SLM", mask)               # upload pattern
-    core.setConfig("Channel", "CyanStim")       # light on: deliver
-    advance(sim, seconds=1.0)                   # sample responds
-    history.append(np.array([(cx, cy) for cx, cy, _ in cells]))
-
+history = run_experiment(steer_up).wait()
 print("Mean y position: first frame "
       f"{history[0][:, 1].mean():.0f} -> last frame {history[-1][:, 1].mean():.0f}")
 # Appreciate that the mean y decreased: the population moved up.
@@ -160,18 +173,23 @@ def build_split_mask(cells, offset_px=15, spot_radius=11, shape=(512, 512)):
     return mask
 
 
+def steer_split(run):
+    for i in range(n_cycles):
+        if run.stop_requested:
+            break
+        core.setConfig("Channel", "miRFP")
+        core.snapImage()
+        img = core.getImage()
+        cells = detect_cells(img)
+        core.setSLMImage("SLM", build_split_mask(cells))
+        core.setConfig("Channel", "CyanStim")
+        run.sleep(1.0)
+    core.setConfig("Channel", "phase-contrast")
+    return img, cells
+
+
 sim.reset()
-start = None
-for i in range(n_cycles):
-    core.setConfig("Channel", "miRFP")
-    core.snapImage()
-    img = core.getImage()
-    cells = detect_cells(img)
-    if start is None:
-        start = {i: (cx, cy) for i, (cx, cy, _) in enumerate(cells)}
-    core.setSLMImage("SLM", build_split_mask(cells))
-    core.setConfig("Channel", "CyanStim")
-    advance(sim, seconds=1.0)
+img, cells = run_experiment(steer_split).wait()
 
 plt.imshow(overlay(img, build_split_mask(cells)))
 plt.axvline(256, color="w", ls="--")
@@ -185,15 +203,13 @@ plt.title("Left half steered up, right half steered down")
 
 # %%
 # EXPLORE TIMING (the most important parameter of any feedback experiment):
-# Re-run the loop with advance(sim, seconds=5.0) instead of 1.0
-#  - the same total simulated time now contains 5x fewer stimulations
+# Re-run the up-steering loop with run.sleep(5.0) instead of 1.0
+#  - the same minute now contains 5x fewer stimulations
 #  - each mask acts on older information
 # Appreciate that the steering becomes weaker or fails entirely.
 #
-# Optional (advanced): load the microscope in real-time mode, where the
-# sample evolves in wall-clock time while your code runs:
-#     core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
-#                                 mode="realtime")
-# Now the duration of YOUR analysis code changes the experiment. Add
-# time.sleep(2) inside the loop and watch the steering degrade. This is
-# exactly the situation on a real microscope.
+# Because the sample lives in wall-clock time, the duration of YOUR
+# analysis code is part of the experiment too: add time.sleep(2) between
+# "analyze" and "actuate" (a slow segmentation) and watch the spots land
+# where the cells used to be. This is exactly the situation on a real
+# microscope.

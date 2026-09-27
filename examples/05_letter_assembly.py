@@ -8,12 +8,24 @@ import numpy as np
 from scipy.spatial import cKDTree
 import matplotlib.pyplot as plt
 
-from vmteach import load_microscope, advance
-from vmteach.analysis import letter_mask, overlay
+from vmteach import load_microscope, run_experiment
+from vmteach.gui import launch_gui
+from vmteach.optogenetic import letter_mask, overlay
+
+# Real cells take minutes to assemble. A simulation can simply run faster:
+# with SPEED = 10 the sample evolves ten times faster than the wall clock,
+# so every wait shrinks by the same factor and the 150 one-second cycles
+# take 15 s instead of 2.5 minutes. On a real microscope SPEED is 1; the
+# rest of the script stays the same. (Your analysis time does not shrink:
+# 30 ms of code now cost 0.3 s of cell behaviour. Speeding up time also
+# speeds up how old your information is.)
+SPEED = 10
 
 # Smaller, more numerous cells + a fat letter: cells are solid objects that
 # keep a collision distance (~2 cell radii), so the stroke must fit them.
-core, sim = load_microscope("optogenetic", n_cells=75, seed=0, base_radius=13.0)
+core, sim = load_microscope("optogenetic", n_cells=75, seed=0, base_radius=13.0,
+                            mode="realtime", speed=SPEED)
+viewer = launch_gui(core)
 target = letter_mask("N", fill=0.85, thickness=60)
 
 # %%
@@ -71,22 +83,31 @@ def build_letter_mask(cells, step_px=12, spot_r=11, occupied_r=28,
 
 
 # %%
-# Run the feedback loop (~10 s for 150 cycles)
-sim.reset()
-for i in range(150):
-    core.setConfig("Channel", "miRFP")        # light off, acquire nuclei
-    core.snapImage()
-    cells = detect_cells(core.getImage())
-    core.setSLMImage("SLM", build_letter_mask(cells))
-    core.setConfig("Channel", "CyanStim")    # light on: deliver the pattern
-    advance(sim, seconds=1.0)
+# Run the feedback loop in the background (150 cycles, ~15 s at SPEED = 10)
+# and watch the letter form in the viewer.
 
-core.setConfig("Channel", "mVenus")        # cell outlines for the metric
-core.snapImage()
-outlines = core.getImage()
-core.setConfig("Channel", "phase-contrast")  # final image for display
-core.snapImage()
-img = core.getImage()
+
+def assemble(run):
+    for i in range(150):
+        if run.stop_requested:
+            break
+        core.setConfig("Channel", "miRFP")        # light off, acquire nuclei
+        core.snapImage()
+        cells = detect_cells(core.getImage())
+        core.setSLMImage("SLM", build_letter_mask(cells))
+        core.setConfig("Channel", "CyanStim")    # light on: deliver the pattern
+        run.sleep(1.0 / SPEED)                   # one second of cell time
+
+    core.setConfig("Channel", "mVenus")          # cell outlines for the metric
+    core.snapImage()
+    outlines = core.getImage()
+    core.setConfig("Channel", "phase-contrast")  # final image for display
+    core.snapImage()
+    return cells, outlines, core.getImage()
+
+
+sim.reset()
+cells, outlines, img = run_experiment(assemble).wait()
 
 # %%
 # Metrics: cells-on-target is the fair one, because pixel coverage cannot reach
