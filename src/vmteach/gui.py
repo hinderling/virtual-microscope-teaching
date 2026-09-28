@@ -35,10 +35,91 @@ def launch_gui(core, *, title: str = "Virtual Microscope"):
     from napari_micromanager.main_window import MainWindow
 
     viewer = napari.Viewer(title=title)
+    _deliver_gui_slots_on_main_thread(core)
     with _lazy_console(viewer):
         widget = MainWindow(viewer, mmcore=core)
     viewer.window.add_dock_widget(widget, name="Micro-Manager", area="top")
     return viewer
+
+
+_MAIN_THREAD_SIGNALS: set[int] = set()
+_CONNECT_PATCHED = False
+
+
+def _deliver_gui_slots_on_main_thread(core) -> None:
+    """Deliver the core's events to Qt widgets on the GUI thread.
+
+    vmteach uses pymmcore-plus's psygnal event backend, so events are
+    delivered synchronously in the thread that emits them (analysis
+    callbacks such as an MDA ``frameReady`` handler run on the acquisition
+    thread, where they belong). napari-micromanager and pymmcore-widgets
+    assume the Qt backend, which queues events to the GUI thread: with
+    psygnal, a GUI-launched MDA ran their slots on the MDA worker thread
+    ("QObject::startTimer: Timers cannot be started from another thread",
+    "QObject::setParent: ... different thread").
+
+    From now on, every slot that belongs to a Qt object and connects to
+    this core's (or its MDA runner's) signals is delivered on the main
+    thread: immediately when the event comes from the main thread (GUI
+    clicks behave exactly as before), queued to the Qt event loop when it
+    comes from another thread. Plain functions, such as your own analysis
+    callbacks, keep running in the emitting thread.
+    """
+    from psygnal import SignalInstance
+    from qtpy.QtCore import QObject
+
+    global _CONNECT_PATCHED
+    for group in (core.events, core.mda.events):
+        for name in dir(group):
+            sig = getattr(group, name, None)
+            if isinstance(sig, SignalInstance):
+                _MAIN_THREAD_SIGNALS.add(id(sig))
+    _start_main_thread_queue()
+    if _CONNECT_PATCHED:
+        return
+    original = SignalInstance.connect
+
+    def connect(self, slot=None, *, thread=None, **kwargs):
+        if (thread is None and slot is not None
+                and id(self) in _MAIN_THREAD_SIGNALS
+                and isinstance(getattr(slot, "__self__", None), QObject)):
+            thread = "main"
+        return original(self, slot, thread=thread, **kwargs)
+
+    SignalInstance.connect = connect
+    _CONNECT_PATCHED = True
+
+
+_QUEUE_TIMER = None
+
+
+def _start_main_thread_queue() -> None:
+    """Deliver queued events on the Qt main thread (once per process).
+
+    Like ``psygnal.qt.start_emitting_from_queue``, but an event queued for
+    a widget that was deleted before delivery (napari-micromanager rebuilds
+    its preset dropdowns, for example) is dropped instead of raising: a
+    direct emission would silently skip the dead receiver too.
+    """
+    global _QUEUE_TIMER
+    if _QUEUE_TIMER is not None:
+        return
+    from psygnal import EmitLoopError, emit_queued
+    from qtpy.QtCore import QTimer
+    from qtpy.QtWidgets import QApplication
+
+    def drain():
+        while True:
+            try:
+                emit_queued()
+                return
+            except EmitLoopError as exc:
+                if not isinstance(exc.__cause__, ReferenceError):
+                    raise
+
+    _QUEUE_TIMER = QTimer(QApplication.instance())
+    _QUEUE_TIMER.timeout.connect(drain)
+    _QUEUE_TIMER.start(0)
 
 
 class _lazy_console:
