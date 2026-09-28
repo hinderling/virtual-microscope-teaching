@@ -289,6 +289,30 @@ def _make_core_class():
                 args = (self.getShutterDevice(), args[0])
             super().setShutterOpen(*args)
 
+        # Core role properties (Core-Camera, Core-Focus, ...): UniMMCore
+        # routes setProperty("Core", ...) to its Python-device-aware
+        # setters, but getProperty / getAllowedPropertyValues fall through
+        # to the C++ core, which does not know Python devices and reports
+        # "" (the property browser shows empty role dropdowns). Answer them
+        # from the device registry. Drop once fixed upstream.
+        _ROLES = {"Camera": ("getCameraDevice", "CameraDevice"),
+                  "Focus": ("getFocusDevice", "StageDevice"),
+                  "XYStage": ("getXYStageDevice", "XYStageDevice"),
+                  "Shutter": ("getShutterDevice", "ShutterDevice"),
+                  "SLM": ("getSLMDevice", "SLMDevice")}
+
+        def getProperty(self, label, propName):
+            if label == "Core" and propName in self._ROLES:
+                return getattr(self, self._ROLES[propName][0])()
+            return super().getProperty(label, propName)
+
+        def getAllowedPropertyValues(self, label, propName):
+            if label == "Core" and propName in self._ROLES:
+                from pymmcore_plus import DeviceType
+                dtype = DeviceType[self._ROLES[propName][1]]
+                return ("",) + tuple(self.getLoadedDevicesOfType(dtype))
+            return super().getAllowedPropertyValues(label, propName)
+
     return VirtualMicroscopeCore
 
 

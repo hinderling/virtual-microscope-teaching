@@ -4,6 +4,7 @@ Usage:  .venv/bin/python scripts/make_screenshots.py
 
 Captures:
   docs/images/napari_gui.png        — GUI with MM toolbars + preview snap
+  docs/images/property_browser.png  — device property browser
   docs/images/results_explorer.png  — show_results layer stack (split steering)
 
 Runs a real (briefly visible) napari window; total runtime ~1 min.
@@ -56,6 +57,31 @@ def shot_gui():
     napari.run()
 
 
+def shot_property_browser():
+    """napari with the Device Property Browser docked on the right: every
+    device property (camera Binning, LED and filter-wheel labels that the
+    Channel presets set, the core's device roles), in napari's styling."""
+    import napari
+    from pymmcore_widgets import PropertyBrowser
+    core, sim = load_microscope("optogenetic", mode="stepped", n_cells=20, seed=0)
+    viewer = launch_gui(core)
+    browser = PropertyBrowser(mmcore=core)
+    viewer.window.add_dock_widget(browser, name="Device Property Browser",
+                                  area="right")
+
+    def act():
+        viewer.window._qt_window.resize(1700, 950)
+        core.setConfig("Channel", "phase-contrast")
+        core.snapImage()
+        QTimer.singleShot(1200, lambda: (
+            viewer.window.screenshot(f"{OUT}/property_browser.png",
+                                     canvas_only=False),
+            viewer.close()))
+
+    QTimer.singleShot(3000, act)
+    napari.run()
+
+
 def shot_results():
     import napari
     core, sim = load_microscope("optogenetic", mode="stepped", n_cells=20, seed=0)
@@ -97,5 +123,6 @@ def shot_results():
 
 if __name__ == "__main__":
     shot_gui()
+    shot_property_browser()
     shot_results()
     print("screenshots written to", OUT)
