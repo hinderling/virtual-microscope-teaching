@@ -24,7 +24,7 @@ pip install "virtual-microscope-teaching[gui] @ git+https://github.com/hinderlin
 
 Requires Python ≥ 3.10, runs locally on any laptop. No hardware, no Micro-Manager device adapters, no C++. Everything is pure Python.
 
-> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. In stepped mode a full 100-cycle feedback experiment computes in ~3 s.
+> The very first `load_microscope()` compiles the simulation physics (numba, about 5 s) and caches the result on disk, so every later load takes under a second, including after restarting Python. In stepped mode (`mode="stepped"`) a full 100-cycle feedback experiment computes in ~3 s.
 
 ## Quick start: a complete feedback experiment
 
@@ -34,8 +34,8 @@ import cv2, numpy as np
 from vmteach import load_microscope
 from vmteach.optogenetic import detect_nuclei
 
-# realtime: the sample lives in wall-clock time, like on a real microscope
-core, sim = load_microscope("optogenetic", n_cells=20, seed=0, mode="realtime")
+# the sample lives in wall-clock time (realtime, the default), like on a real microscope
+core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
 
 for cycle in range(60):
     # ACQUIRE the nuclei channel: identical calls on real hardware
@@ -102,9 +102,9 @@ A backend is a factory returning a sim object that implements the small bridge c
 ## Timing model (read this before designing experiments)
 
 1. **Stimulation is gated on the light path**: `setSLMImage` only *uploads* the pattern, because the SLM modulates light that is not on yet. Switching to the `CyanStim` channel engages the stimulation LED and delivers the pattern (an impulse that *sets* cell velocity toward the light); switching to an imaging channel turns it off. One delivery per loop iteration, so the feedback loop frequency is the stimulation frequency, as in pulsed optogenetic protocols. Leaving the light engaged while time advances does not stimulate again: delivery is an impulse at the delivery events (the light-on transition and snaps in `CyanStim`), which is deliberate pulsed-protocol behavior. Snapping in `CyanStim` images the projected light itself (mask–sample alignment check).
-2. **Real-time mode**, `load_microscope(..., mode="realtime")`: the sample evolves in wall-clock time *while your code runs*, like on a real microscope. You wait with `time.sleep`, and your analysis latency becomes part of the experiment. This is what the examples use.
+2. **Real-time mode** (the default): the sample evolves in wall-clock time *while your code runs*, like on a real microscope. You wait with `time.sleep`, and your analysis latency becomes part of the experiment. This is what the examples use.
 3. **Faster than real time**, `load_microscope(..., mode="realtime", speed=10)`: the sample evolves 10x faster than the wall clock, so slow biology (cells migrating for minutes) can be tested in seconds. Shorten your waits by the same factor (`time.sleep(1.0 / speed)`) to keep the experiment's timing; physics still runs in steps of at most 0.05 s, so the cells behave the same at any speed. Only the simulator offers this: on a real microscope, the biology sets the pace. Note that your code's run time does *not* shrink, so at high speed it costs proportionally more sample time.
-4. **Stepped mode** (the `load_microscope` default): simulated time advances only via `advance(sim, seconds=...)`, never on its own. Same seed + same loop = identical result on every machine, which is what tests and figure scripts need. `sim.time` reports the simulated seconds in every mode.
+4. **Stepped mode**, `load_microscope(..., mode="stepped")`: simulated time advances only via `advance(sim, seconds=...)`, never on its own. Same seed + same loop = identical result on every machine, which is what tests and figure scripts need. `sim.time` reports the simulated seconds in every mode.
 
 ## How it relates to pymmcore-plus
 
@@ -125,7 +125,7 @@ The top-level `vmteach` namespace is the simulator:
 |---|---|
 | `load_microscope(backend, n_cells, seed, mode, speed)` | Create the microscope → `(core, sim)` |
 | `register_backend(name, factory)` | Register a new simulated sample |
-| `advance(sim, seconds)` | Advance simulated time (stepped mode only; on hardware you simply wait) |
+| `advance(sim, seconds)` | Advance simulated time (stepped mode only; in realtime mode and on hardware you wait with `time.sleep`) |
 | `run_experiment(fn)` | Run an experiment loop in the background, returning a `Run` handle (`stop()`, `sleep()`, `wait()`); keeps notebook and GUI live |
 | `sim.reset(seed)` | Restore the initial sample, for bit-identical reruns |
 

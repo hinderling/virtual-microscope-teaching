@@ -5,13 +5,14 @@ shipped one: :mod:`vmteach.optogenetic`).
 
 Design notes
 ------------
-* ``load_microscope`` defaults to **stepped mode**: no background thread,
-  simulated time advances only through :func:`advance`. Same seed + same
-  loop = identical trajectories on every machine. That is what makes the
-  course exercises reproducible.
-* ``mode="realtime"`` starts the wall-clock RealtimeEngine (idle pause
-  disabled so the sample never silently freezes while a learner reads
-  instructions). Used for the GUI activity and the latency lesson.
+* ``load_microscope`` defaults to **realtime mode**: the wall-clock
+  RealtimeEngine runs the sample in the background (idle pause disabled
+  so the sample never silently freezes while a learner reads
+  instructions), and scripts wait with ``time.sleep`` exactly as on real
+  hardware. ``speed`` runs it faster than the wall clock.
+* ``mode="stepped"``: no background thread, simulated time advances only
+  through :func:`advance`. Same seed + same loop = identical trajectories
+  on every machine, which is what tests and figure scripts need.
 * Stimulation is applied when a mask is set (``core.setSLMImage``) and on
   each snap while that mask is displayed. The impulse sets (not adds) the
   cell velocity toward the light, so within one loop iteration this is
@@ -50,7 +51,7 @@ def register_backend(name: str, factory) -> None:
 
 
 def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
-                    seed: int = 0, mode: str = "stepped", speed: float = 1.0,
+                    seed: int = 0, mode: str = "realtime", speed: float = 1.0,
                     warmup: bool = True, **kwargs):
     """Create a virtual microscope and return ``(core, sim)``.
 
@@ -64,10 +65,11 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
             um). Each 2048 um well holds 16 fields, so the default
             population is 16x this number per well.
         seed: Random seed. Same seed, same experiment, on every machine.
-        mode: ``"stepped"`` (default): simulated time advances only via
-            :func:`advance`; fully deterministic.
-            ``"realtime"``: the sample evolves in wall-clock time while
-            your code runs, like on a real microscope.
+        mode: ``"realtime"`` (default): the sample evolves in wall-clock
+            time while your code runs, like on a real microscope; wait
+            with ``time.sleep``.
+            ``"stepped"``: simulated time advances only via
+            :func:`advance`; fully deterministic (tests, figures).
         speed: Realtime mode only: how many times faster than the wall
             clock the sample evolves. ``speed=10`` makes one second of
             waiting cover ten seconds of cell behaviour, so slow biology
@@ -101,7 +103,14 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
 
     sim = BACKENDS[backend](n_cells=n_cells, seed=seed, **kwargs)
     bridge = SimulationBridge(sim)
+    # a previous microscope's realtime engine would keep stepping its
+    # (now unreachable) sample in the background: stop it
+    import vmteach.bridge as _bridge
+    old = _bridge.GLOBAL_BRIDGE
+    if old is not None and old._engine is not None:
+        old._engine.stop()
     set_global_bridge(bridge)
+    sim._vmteach_mode = mode
 
     global _VirtualMicroscopeCore
     if _VirtualMicroscopeCore is None:
@@ -291,8 +300,15 @@ def advance(sim, seconds: float = 1.0, dt: float = 0.05) -> None:
 
     Replaces ``time.sleep()`` from real experiments: on hardware you *wait*
     for the sample to respond, on the deterministic virtual microscope you
-    *advance* it.
+    *advance* it. In realtime mode the sample advances on its own; wait
+    with ``time.sleep`` there instead.
     """
+    if getattr(sim, "_vmteach_mode", "stepped") == "realtime":
+        raise RuntimeError(
+            "advance() is for stepped mode; this microscope runs in "
+            "realtime mode, where the sample evolves on its own. Wait with "
+            "time.sleep(seconds) instead, or load the microscope with "
+            "mode='stepped' for deterministic, advance()-driven time.")
     n = max(1, round(seconds / dt))
     for _ in range(n):
         sim.step(dt)

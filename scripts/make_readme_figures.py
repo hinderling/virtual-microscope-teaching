@@ -63,7 +63,7 @@ def fig_channel_gallery():
     Display colors are pseudo-colors chosen for contrast, as is common
     practice in fluorescence figures.
     """
-    core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
+    core, sim = load_microscope("optogenetic", mode="stepped", n_cells=20, seed=0,
                                 warmup=False)
     advance(sim, 20)      # let the cell shapes develop
 

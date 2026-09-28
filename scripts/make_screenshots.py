@@ -41,7 +41,7 @@ def segment(nuclei_img):
 
 def shot_gui():
     import napari
-    core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
+    core, sim = load_microscope("optogenetic", mode="stepped", n_cells=20, seed=0)
     viewer = launch_gui(core)
 
     def act():
@@ -58,7 +58,7 @@ def shot_gui():
 
 def shot_results():
     import napari
-    core, sim = load_microscope("optogenetic", n_cells=20, seed=0)
+    core, sim = load_microscope("optogenetic", mode="stepped", n_cells=20, seed=0)
     imgs, masks, cents, segs = [], [], [], []
     for _ in range(80):
         core.setConfig("Channel", "miRFP")      # robust detection channel

@@ -10,7 +10,7 @@ from vmteach.optogenetic import overlay, letter_mask
 
 @pytest.fixture(scope="module")
 def scope():
-    core, sim = load_microscope("optogenetic", n_cells=20, seed=0, warmup=False)
+    core, sim = load_microscope("optogenetic", mode="stepped", n_cells=20, seed=0, warmup=False)
     return core, sim
 
 
@@ -546,7 +546,7 @@ def test_realtime_speed_runs_faster_with_short_steps():
     assert 6.0 < simt / wall < 12.0, f"speed-up {simt / wall:.1f}"
     assert simt / max(1, steps) <= 0.0501, "physics steps got longer"
     with pytest.raises(ValueError):
-        load_microscope("optogenetic", n_cells=5, speed=10, warmup=False)
+        load_microscope("optogenetic", mode="stepped", n_cells=5, speed=10, warmup=False)
 
 
 def test_run_experiment_stops_and_reraises():
@@ -584,3 +584,14 @@ def test_reset_is_safe_while_realtime_engine_runs():
         core.snapImage()
     _stop_engine()
     assert core.getImage().shape == (512, 512)
+
+
+def test_default_is_realtime_and_advance_guards_it():
+    core, sim = load_microscope("optogenetic", n_cells=5, seed=1, warmup=False)
+    from vmteach.bridge import GLOBAL_BRIDGE
+    try:
+        assert GLOBAL_BRIDGE._engine is not None, "default should be realtime"
+        with pytest.raises(RuntimeError):
+            advance(sim, 1.0)
+    finally:
+        _stop_engine()
