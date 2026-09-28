@@ -57,6 +57,23 @@ def shot_gui():
     napari.run()
 
 
+def annotate_button(img, tip, label, k=1.0):
+    """Draw an arrow pointing up at ``tip`` (x, y) with a label below it."""
+    color = (0, 190, 255)                       # BGR: amber
+    x, y = tip
+    tail = (x + int(120 * k), y + int(150 * k))
+    cv2.arrowedLine(img, tail, (x, y + int(6 * k)), color, max(2, int(4 * k)),
+                    cv2.LINE_AA, tipLength=0.18)
+    scale, th = 0.9 * k, max(1, int(2 * k))
+    (tw, tht), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, th)
+    org = (tail[0] - tw // 2, tail[1] + tht + int(12 * k))
+    pad = int(8 * k)
+    cv2.rectangle(img, (org[0] - pad, org[1] - tht - pad),
+                  (org[0] + tw + pad, org[1] + pad), (30, 30, 30), -1)
+    cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, th,
+                cv2.LINE_AA)
+
+
 def shot_property_browser():
     """napari with the Device Property Browser docked on the right: every
     device property (camera Binning, LED and filter-wheel labels that the
@@ -73,10 +90,24 @@ def shot_property_browser():
         viewer.window._qt_window.resize(1700, 950)
         core.setConfig("Channel", "phase-contrast")
         core.snapImage()
-        QTimer.singleShot(1200, lambda: (
-            viewer.window.screenshot(f"{OUT}/property_browser.png",
-                                     canvas_only=False),
-            viewer.close()))
+        QTimer.singleShot(1200, capture)
+
+    def capture():
+        from qtpy.QtCore import QPoint
+        from qtpy.QtWidgets import QPushButton
+        win = viewer.window._qt_window
+        path = f"{OUT}/property_browser.png"
+        viewer.window.screenshot(path, canvas_only=False)
+        # the toolbar button that opens the browser, in screenshot pixels
+        btn = next(b for b in win.findChildren(QPushButton)
+                   if b.toolTip() == "Device Property Browser")
+        tl = btn.mapTo(win, QPoint(0, 0))
+        img = cv2.imread(path)
+        k = img.shape[1] / win.width()
+        bx, by = (tl.x() + btn.width() / 2) * k, (tl.y() + btn.height()) * k
+        annotate_button(img, (int(bx), int(by)), "Device Property Browser", k)
+        cv2.imwrite(path, img)
+        viewer.close()
 
     QTimer.singleShot(3000, act)
     napari.run()
