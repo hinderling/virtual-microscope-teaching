@@ -33,12 +33,12 @@ viewer = launch_gui(core)
 # %%
 # Now do EXACTLY the same things from code, and watch the GUI react:
 core.snapImage()                       # = pressing "Snap"  (preview updates!)
-core.setState("Objective", 3)          # = choosing "40x" in the dropdown
+core.setStateLabel("Objective", "20x")  # = choosing "20x" in the dropdown
 core.setConfig("Channel", "miRFP")     # = choosing "miRFP" in the dropdown
-core.setExposure(100.0)                # = typing 100 in the Exposure box
+core.setExposure(50.0)                 # = typing 50 in the Exposure box
 core.snapImage()
 
-# The dropdowns in the GUI now show 40x / miRFP / 100 ms: the GUI is not
+# The dropdowns in the GUI now show 20x / miRFP / 50 ms: the GUI is not
 # "another program", it is a viewer onto the same core object your script
 # controls. On a real microscope this is identical: napari-micromanager
 # in front, your feedback script behind, one shared core.

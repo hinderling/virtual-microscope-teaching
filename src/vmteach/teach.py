@@ -289,6 +289,33 @@ def _make_core_class():
                 args = (self.getShutterDevice(), args[0])
             super().setShutterOpen(*args)
 
+        # UniMMCore.setProperty on a Python device changes the value but
+        # emits no propertyChanged (real devices report changes through
+        # the C++ callback relay). Only state devices emit, from their own
+        # setters. GUI widgets such as the Device Property Browser listen
+        # to propertyChanged, so they missed e.g. a scripted Binning
+        # change. Emit it here, after the device lock is released, for
+        # every property the device does not report itself. Drop once
+        # fixed upstream.
+        def setProperty(self, label, propName, propValue):
+            super().setProperty(label, propName, propValue)
+            self._emit_pydevice_change(label, propName)
+
+        def setExposure(self, *args) -> None:
+            super().setExposure(*args)
+            label = args[0] if len(args) == 2 else self.getCameraDevice()
+            self._emit_pydevice_change(label, "Exposure")
+
+        def _emit_pydevice_change(self, label, propName) -> None:
+            dev = self._pydevices[label] if label in self._pydevices else None
+            if dev is None:
+                return
+            from pymmcore_plus.experimental.unicore import StateDevice
+            if isinstance(dev, StateDevice) and propName in ("State", "Label"):
+                return                      # state devices emit themselves
+            self.events.propertyChanged.emit(
+                label, propName, self.getProperty(label, propName))
+
         # Core role properties (Core-Camera, Core-Focus, ...): UniMMCore
         # routes setProperty("Core", ...) to its Python-device-aware
         # setters, but getProperty / getAllowedPropertyValues fall through
