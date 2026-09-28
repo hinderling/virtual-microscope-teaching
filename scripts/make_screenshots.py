@@ -61,13 +61,13 @@ def annotate_button(img, tip, label, k=1.0):
     """Draw an arrow pointing up at ``tip`` (x, y) with a label below it."""
     color = (0, 190, 255)                       # BGR: amber
     x, y = tip
-    tail = (x + int(120 * k), y + int(150 * k))
-    cv2.arrowedLine(img, tail, (x, y + int(6 * k)), color, max(2, int(4 * k)),
-                    cv2.LINE_AA, tipLength=0.18)
-    scale, th = 0.9 * k, max(1, int(2 * k))
+    tail = (x + int(60 * k), y + int(75 * k))
+    cv2.arrowedLine(img, tail, (x, y + int(4 * k)), color, max(2, int(2 * k)),
+                    cv2.LINE_AA, tipLength=0.25)
+    scale, th = 0.6 * k, max(1, int(1.5 * k))
     (tw, tht), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, scale, th)
     org = (tail[0] - tw // 2, tail[1] + tht + int(12 * k))
-    pad = int(8 * k)
+    pad = int(5 * k)
     cv2.rectangle(img, (org[0] - pad, org[1] - tht - pad),
                   (org[0] + tw + pad, org[1] + pad), (30, 30, 30), -1)
     cv2.putText(img, label, org, cv2.FONT_HERSHEY_SIMPLEX, scale, color, th,
