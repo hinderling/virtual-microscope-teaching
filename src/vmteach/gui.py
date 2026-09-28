@@ -35,9 +35,48 @@ def launch_gui(core, *, title: str = "Virtual Microscope"):
     from napari_micromanager.main_window import MainWindow
 
     viewer = napari.Viewer(title=title)
-    widget = MainWindow(viewer, mmcore=core)
+    with _lazy_console(viewer):
+        widget = MainWindow(viewer, mmcore=core)
     viewer.window.add_dock_widget(widget, name="Micro-Manager", area="top")
     return viewer
+
+
+class _lazy_console:
+    """Keep napari's console lazy while napari-micromanager starts up.
+
+    napari-micromanager pushes its variables with
+    ``getattr(qt_viewer, "console").push(...)``, which creates the napari
+    console right away, i.e. an in-process IPython kernel. In a plain
+    ``python`` prompt that kernel takes over ``__main__`` and the prompt
+    (``In :``): the user's variables vanish and typed commands no longer
+    reach their session. Route those pushes through napari's lazy
+    ``viewer.update_console`` instead, so the console is only created when
+    the user opens it. Drop once fixed upstream.
+    """
+
+    def __init__(self, viewer):
+        self._viewer = viewer
+        self._cls = type(viewer.window._qt_viewer)
+        self._orig = self._cls.console
+
+    def __enter__(self):
+        viewer, orig = self._viewer, self._orig
+
+        class _Queue:
+            def push(self, variables):
+                viewer.update_console(variables)
+
+        def get(qt_viewer):
+            if qt_viewer._console is None:
+                return _Queue()
+            return orig.fget(qt_viewer)
+
+        self._cls.console = property(get, orig.fset)
+        return self
+
+    def __exit__(self, *exc):
+        self._cls.console = self._orig
+        return False
 
 
 def show_results(images, masks=None, centroids=None, segmentations=None,
