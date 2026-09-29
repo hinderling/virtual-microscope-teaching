@@ -30,6 +30,7 @@ class SimulationBridge:
     def __init__(self, sim):
         self._sim = sim
         self._current_slm_mask: np.ndarray | None = None
+        self._shutter_open = False
         self._engine = None          # set by teach.load_microscope (realtime)
 
     # ── camera ──────────────────────────────────────────────────────────
@@ -62,11 +63,24 @@ class SimulationBridge:
     # ── state devices (LED / Filter Wheel / Objective) ──────────────────
 
     def update_state(self, dict_state: dict) -> None:
-        prev_led = self._sim.state_devices.get("LED", {}).get("label")
         self._sim.state_devices.update(dict_state)
-        new_led = self._sim.state_devices.get("LED", {}).get("label")
-        # Stimulation light switched ON: deliver the loaded SLM pattern
-        if new_led == "BLUE" and prev_led != "BLUE":
+        # switching the LED to BLUE only selects the light path; light
+        # reaches the sample while the shutter is open (see set_shutter)
+        if self._shutter_open:
+            self._apply_mask(self._current_slm_mask)
+
+    # ── shutter ─────────────────────────────────────────────────────────
+
+    def set_shutter(self, open_: bool) -> None:
+        """Called by the shutter device (``core.setShutterOpen``).
+
+        Snaps and live frames illuminate the sample by themselves (the
+        core's auto-shutter), so this is only needed to hold the light on
+        by hand. Opening it with the CyanStim channel selected delivers the
+        loaded SLM pattern, like a manual exposure on real hardware.
+        """
+        self._shutter_open = bool(open_)
+        if self._shutter_open:
             self._apply_mask(self._current_slm_mask)
 
     # ── SLM ─────────────────────────────────────────────────────────────
@@ -74,12 +88,14 @@ class SimulationBridge:
     def set_slm_mask(self, mask: np.ndarray) -> None:
         """Called by the SLM device: upload the pattern.
 
-        Delivery is gated on the light path: if the stimulation light is
-        already on the pattern acts immediately, otherwise it waits until
-        the channel is switched to "CyanStim" (see update_state).
+        The SLM only shapes light, so uploading does not stimulate by
+        itself: the pattern reaches the sample when the stimulation light
+        shines through it, i.e. on a snap (or live frame) in the CyanStim
+        channel, or while the shutter is held open in CyanStim.
         """
         self._current_slm_mask = mask
-        self._apply_mask(mask)
+        if self._shutter_open:
+            self._apply_mask(mask)
 
     def _apply_mask(self, mask) -> None:
         """Push the pattern into the sim (gated there on the light path).

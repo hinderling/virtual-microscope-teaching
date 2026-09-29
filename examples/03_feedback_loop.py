@@ -93,20 +93,15 @@ plt.title("Stimulation mask (blue): spots above each cell")
 
 # %%
 # ACTUATE, in two steps, exactly like on real hardware:
-# 1. upload the pattern to the SLM. This alone does nothing, because the
-#    SLM only *modulates* light that is not on yet
+# 1. upload the mask to the SLM. This alone does nothing: the SLM only
+#    shapes light, and no light is on yet
 core.setSLMImage("SLM", mask)
-# 2. engage the stimulation light path: switching to the CyanStim channel
-#    turns on the stimulation LED. NOW the pattern is delivered and the
-#    illuminated cells receive a protrusion + motility impulse
-core.setConfig("Channel", "CyanStim")
-
-# %%
-# SEE THE LIGHT: on a real microscope the stimulation light is physically
-# projected onto the sample, and you can image it. Switch to the CyanStim
-# channel (stimulation LED + matching emission filter) and snap: the SLM
-# pattern appears, with optics halo and noise, over a faint reflection of
-# the cells. This is how you verify mask–sample alignment at the scope.
+# 2. expose in the CyanStim channel: selecting the channel picks the blue
+#    stimulation LED, and the snap opens the shutter. NOW the pattern is
+#    delivered and the illuminated cells receive a protrusion + motility
+#    impulse. The same snap also images the projected light: the SLM
+#    pattern appears, with optics halo and noise, over a faint reflection
+#    of the cells. This is how you verify mask-sample alignment.
 core.setConfig("Channel", "CyanStim")
 core.snapImage()
 stim_img = core.getImage()
@@ -123,10 +118,10 @@ core.setConfig("Channel", "phase-contrast")
 
 # %%
 # CLOSE THE LOOP: acquire → analyze → decide → actuate → wait → repeat.
-# Note the light choreography each cycle: switching to miRFP for the
-# acquisition turns the stimulation light OFF; after uploading the new mask,
-# switching to CyanStim turns it back ON. Forget the switch and nothing
-# happens, which is a classic debugging moment at a real microscope.
+# Note the light choreography each cycle: snap miRFP to see the cells,
+# upload the new mask, then snap CyanStim to expose it. Forget the CyanStim
+# exposure and nothing happens, a classic debugging moment at a real
+# microscope.
 # The loop runs in the background (run_experiment), so the viewer stays
 # live: watch the spots follow the cells as the population moves up.
 # run.sleep(1.0) is the interval between cycles, as on real hardware.
@@ -139,13 +134,14 @@ def steer_up(run):
     for i in range(n_cycles):
         if run.stop_requested:                  # run.stop() ends it early
             break
-        core.setConfig("Channel", "miRFP")       # light off, imaging channel
+        core.setConfig("Channel", "miRFP")       # imaging channel
         core.snapImage()
         img = core.getImage()                   # acquire
         cells = detect_cells(img)               # analyze
         mask = build_steer_mask(cells)          # decide
         core.setSLMImage("SLM", mask)           # upload pattern
-        core.setConfig("Channel", "CyanStim")   # light on: deliver
+        core.setConfig("Channel", "CyanStim")   # actuate: expose the
+        core.snapImage()                        # pattern
         history.append(np.array([(cx, cy) for cx, cy, _ in cells]))
         run.sleep(1.0)                          # the sample responds
     core.setConfig("Channel", "phase-contrast")
@@ -156,7 +152,7 @@ sim.reset()
 history = run_experiment(steer_up).wait()
 print("Mean y position: first frame "
       f"{history[0][:, 1].mean():.0f} -> last frame {history[-1][:, 1].mean():.0f}")
-# Appreciate that the mean y decreased: the population moved up.
+# The mean y decreased: the population moved up.
 
 # %%
 # PER-OBJECT DECISIONS: steer each cell differently based on a measurement.
@@ -183,6 +179,7 @@ def steer_split(run):
         cells = detect_cells(img)
         core.setSLMImage("SLM", build_split_mask(cells))
         core.setConfig("Channel", "CyanStim")
+        core.snapImage()
         run.sleep(1.0)
     core.setConfig("Channel", "phase-contrast")
     return img, cells

@@ -416,12 +416,13 @@ class OptoCellSim:
         """Apply optogenetic stimulation. ``mask`` is in SLM pixels.
 
         Gated on the light path: the SLM only *modulates* light, so the
-        pattern is delivered to the sample only while the stimulation
-        LED is on (Channel "CyanStim"), exactly like real hardware.
+        pattern is delivered to the sample only when light passes through
+        it with the stimulation LED selected (Channel "CyanStim"), i.e. on
+        a snap or live frame, or while the shutter is held open (see
+        :class:`vmteach.bridge.SimulationBridge`), like real hardware.
 
-        Delivery is an impulse at the delivery events (light-on transition
-        and snaps while lit); time advancing with the light engaged does
-        not stimulate again. This models pulsed stimulation protocols.
+        Delivery is an impulse per exposure; time advancing between
+        exposures does not stimulate again. This models pulsed protocols.
         """
         if mask is None or not mask.any() or not self.stim_light_on:
             for c in self._cells:

@@ -130,7 +130,8 @@ def shot_results():
             dy = -15 if cx < 256 else 15
             cv2.circle(mask, (cx, int(np.clip(cy + dy, 0, 511))), 11, 255, -1)
         core.setSLMImage("SLM", mask)
-        core.setConfig("Channel", "CyanStim")   # gated delivery
+        core.setConfig("Channel", "CyanStim")   # expose the pattern
+        core.snapImage()
         advance(sim, 1.0)
         imgs.append(img.copy())
         masks.append(mask)

@@ -105,7 +105,8 @@ def test_feedback_loop_steers_cells(scope):
             img = core.getImage()
             cells = detect_cells(img, min_area=20)
             core.setSLMImage("SLM", steer_mask(cells))    # upload pattern
-            core.setConfig("Channel", "CyanStim")         # light ON: deliver
+            core.setConfig("Channel", "CyanStim")         # expose the pattern
+            core.snapImage()
             advance(sim, seconds=1.0)
             total_dy += sim.centers[:, 1] - y_prev
             y_prev = sim.centers[:, 1].copy()
@@ -135,8 +136,9 @@ def test_reset_clears_leftover_slm_mask(scope):
 
 
 def test_stimulation_gated_on_light_path(scope):
-    """Uploading a mask alone must NOT stimulate; engaging the CyanStim
-    light path must; switching away must clear the stimulation."""
+    """Light reaches the sample only during an exposure in CyanStim:
+    uploading a mask or selecting the channel alone must NOT stimulate;
+    a snap (or a manually opened shutter) must; other channels clear it."""
     core, sim = scope
     sim.reset()
     core.setConfig("Channel", "phase-contrast")
@@ -145,17 +147,26 @@ def test_stimulation_gated_on_light_path(scope):
     assert not any(c.is_stimulated for c in sim._cells), \
         "mask upload alone must not stimulate"
     core.setConfig("Channel", "CyanStim")
+    assert not any(c.is_stimulated for c in sim._cells), \
+        "selecting the channel without exposing must not stimulate"
+    core.snapImage()
     # only cells inside the illuminated field of view can receive light
     off, fov = sim.view_origin, sim.fov_um
     in_view = [c for c in sim._cells
                if off[0] + 30 < c.center[0] < off[0] + fov - 30
                and off[1] + 30 < c.center[1] < off[1] + fov - 30]
     assert in_view and all(c.is_stimulated for c in in_view), \
-        "engaging the light path must deliver the pattern to in-view cells"
+        "a CyanStim snap must deliver the pattern to in-view cells"
     core.setConfig("Channel", "phase-contrast")
     core.snapImage()
     assert not any(c.is_stimulated for c in sim._cells), \
-        "light off must clear stimulation"
+        "exposing another channel must clear stimulation"
+    core.setConfig("Channel", "CyanStim")
+    core.setShutterOpen(True)
+    assert all(c.is_stimulated for c in in_view), \
+        "opening the shutter in CyanStim must deliver the pattern"
+    core.setShutterOpen(False)
+    core.setConfig("Channel", "phase-contrast")
 
 
 def test_cyanstim_images_projected_light(scope):
@@ -363,10 +374,10 @@ def test_slm_follows_objective_magnification(scope):
     cv2.circle(mask, (cx, int(cy - r_px)), int(r_px / 2), 255, -1)
     core.setSLMImage("SLM", mask)
     core.setConfig("Channel", "CyanStim")
+    core.snapImage()
     assert any(c.is_stimulated for c in sim._cells), \
         "spot on a 40x membrane did not stimulate"
     # the projected light is imaged where the mask is, at 40x too
-    core.snapImage()
     img = core.getImage()
     assert img[mask > 0].mean() > img[mask == 0].mean() + 100
     core.setConfig("Channel", "phase-contrast")
@@ -595,3 +606,18 @@ def test_default_is_realtime_and_advance_guards_it():
             advance(sim, 1.0)
     finally:
         _stop_engine()
+
+
+def test_letter_mask_centred_and_sized():
+    """The drawn letter spans ``fill`` of the frame, centred, and the
+    stroke width follows ``thickness`` (OpenCV 5 ignores putText's)."""
+    from vmteach.optogenetic import letter_mask
+    areas = []
+    for thickness in (40, 60):
+        m = letter_mask("N", fill=0.85, thickness=thickness)
+        ys, xs = np.nonzero(m)
+        assert abs((ys.min() + ys.max()) / 2 - 255.5) <= 3
+        assert abs((xs.min() + xs.max()) / 2 - 255.5) <= 3
+        assert abs((ys.max() - ys.min() + 1) - 0.85 * 512) <= 8
+        areas.append((m > 0).sum())
+    assert areas[1] > 1.3 * areas[0], "thickness has no effect"
