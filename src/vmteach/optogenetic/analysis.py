@@ -231,6 +231,29 @@ def overlay(img: np.ndarray, mask: np.ndarray,
     return rgb.astype(np.uint8)
 
 
+def _thin(binary: np.ndarray) -> np.ndarray:
+    """Zhang-Suen thinning: the one-pixel centre line of each stroke."""
+    img = np.pad((binary > 0).astype(np.uint8), 1)
+    while True:
+        changed = False
+        for step in (0, 1):
+            p = [np.roll(np.roll(img, -dy, 0), -dx, 1) for dy, dx in
+                 ((-1, 0), (-1, 1), (0, 1), (1, 1), (1, 0), (1, -1),
+                  (0, -1), (-1, -1))]         # P2..P9, clockwise from N
+            n = sum(p)
+            t = sum((p[i] == 0) & (p[(i + 1) % 8] == 1) for i in range(8))
+            if step == 0:
+                c = (p[0] * p[2] * p[4] == 0) & (p[2] * p[4] * p[6] == 0)
+            else:
+                c = (p[0] * p[2] * p[6] == 0) & (p[0] * p[4] * p[6] == 0)
+            kill = (img == 1) & (n >= 2) & (n <= 6) & (t == 1) & c
+            if kill.any():
+                img[kill] = 0
+                changed = True
+        if not changed:
+            return img[1:-1, 1:-1]
+
+
 def letter_mask(char: str, shape: tuple = (512, 512),
                 fill: float = 0.6, thickness: int = 40) -> np.ndarray:
     """Binary target image of a letter, centered, for the assembly exercise.
@@ -238,8 +261,8 @@ def letter_mask(char: str, shape: tuple = (512, 512),
     Args:
         char: A single character (e.g. ``"N"``).
         shape: Output image shape ``(height, width)``.
-        fill: Approximate fraction of the smaller image dimension the
-            letter should span.
+        fill: Fraction of the smaller image dimension the letter spans
+            (its larger side, as drawn).
         thickness: Stroke thickness in pixels. Keep it wider than a cell
             so cells fit on the stroke.
 
@@ -249,14 +272,29 @@ def letter_mask(char: str, shape: tuple = (512, 512),
     if len(char) != 1:
         raise ValueError("letter_mask takes a single character")
 
-    target_px = int(min(shape) * fill)
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    scale = 1.0
-    (w, h), _ = cv2.getTextSize(char, font, scale, thickness)
-    scale = scale * target_px / max(h, 1)
-    (w, h), _ = cv2.getTextSize(char, font, scale, thickness)
+    # cv2 places text by its baseline and nominal size, not by the pixels
+    # it draws, and its stroke width follows the font scale (OpenCV 5). So
+    # take the glyph's centre line, which scales with the font, size it to
+    # span ``fill`` of the frame, widen it to ``thickness`` and centre it
+    def centre_line(scale):
+        (w, h), base = cv2.getTextSize(char, cv2.FONT_HERSHEY_SIMPLEX,
+                                       scale, 1)
+        glyph = np.zeros((h + base + 20, w + 20), np.uint8)
+        cv2.putText(glyph, char, (10, h + 10), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, 255, 1, cv2.LINE_8)
+        ys, xs = np.nonzero(_thin(glyph))
+        return ys - ys.min(), xs - xs.min()
 
-    mask = np.zeros(shape, dtype=np.uint8)
-    org = ((shape[1] - w) // 2, (shape[0] + h) // 2)
-    cv2.putText(mask, char, org, font, scale, 255, thickness, cv2.LINE_8)
+    ys, xs = centre_line(4.0)
+    span = max(ys.max(), xs.max()) + 1
+    ys, xs = centre_line(4.0 * max(min(shape) * fill - thickness, 1) / span)
+    line = np.zeros(shape, np.uint8)
+    oy = int(round((shape[0] - 1 - ys.max()) / 2))
+    ox = int(round((shape[1] - 1 - xs.max()) / 2))
+    keep = ((ys + oy >= 0) & (ys + oy < shape[0])
+            & (xs + ox >= 0) & (xs + ox < shape[1]))
+    line[ys[keep] + oy, xs[keep] + ox] = 255
+    r = max(thickness // 2, 1)
+    mask = cv2.dilate(line, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
     return mask

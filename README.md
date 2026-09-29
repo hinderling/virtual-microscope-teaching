@@ -53,9 +53,10 @@ for cycle in range(60):
         cv2.circle(mask, (cx, cy - 15), 11, 255, -1)
 
     # ACTUATE, identical calls on real hardware: upload the pattern,
-    # then engage the stimulation light path to deliver it
+    # then expose it with the stimulation light
     core.setSLMImage("SLM", mask)
     core.setConfig("Channel", "CyanStim")
+    core.snapImage()
 
     # let the sample respond: the same line on real hardware
     time.sleep(1.0)
@@ -63,7 +64,7 @@ for cycle in range(60):
 
 Within the minute the cell population migrates upward, steered by your loop. Snap the `phase-contrast` channel to look at it, or [watch it live in napari](#napari-gui). Apart from the `load_microscope` line, this is the script you would run on a real microscope.
 
-More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → stimulate → image, with the ERK-KTR readout), `02_napari_gui.py` (GUI and script drive the same core), `03_feedback_loop.py` (the loop above, step by step, plus per-object decisions and timing), `04_event_driven.py` (the same experiment as declarative useq-schema events), `05_letter_assembly.py` (steer a dense population into the letter N, with the simulation running 10x faster than real time). The examples run in real-time mode with napari-micromanager open, so every snap, channel switch and light pattern shows up live.
+More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → stimulate → image, with the ERK-KTR readout), `02_napari_gui.py` (GUI and script drive the same core), `03_feedback_loop.py` (the loop above, step by step, plus per-object decisions and timing), `04_event_driven.py` (the same experiment as declarative useq-schema events), `05_letter_assembly.py` (steer a dense population into the letter N, with the simulation running 5x faster than real time). The examples run in real-time mode with napari-micromanager open, so every snap, channel switch and light pattern shows up live.
 
 ## The sample: the `optogenetic` backend
 
@@ -101,7 +102,7 @@ A backend is a factory returning a sim object that implements the small bridge c
 
 ## Timing model (read this before designing experiments)
 
-1. **Stimulation is gated on the light path**: `setSLMImage` only *uploads* the pattern, because the SLM modulates light that is not on yet. Switching to the `CyanStim` channel engages the stimulation LED and delivers the pattern (an impulse that *sets* cell velocity toward the light); switching to an imaging channel turns it off. One delivery per loop iteration, so the feedback loop frequency is the stimulation frequency, as in pulsed optogenetic protocols. Leaving the light engaged while time advances does not stimulate again: delivery is an impulse at the delivery events (the light-on transition and snaps in `CyanStim`), which is deliberate pulsed-protocol behavior. Snapping in `CyanStim` images the projected light itself (mask–sample alignment check).
+1. **Stimulation needs an exposure, as on real hardware**: `setSLMImage` only *uploads* the pattern, and selecting the `CyanStim` channel only picks the blue LED. Light reaches the sample when the shutter opens: a snap (or live frames) in `CyanStim`, or `core.setShutterOpen(True)` with `CyanStim` selected. Each exposure delivers one impulse that *sets* cell velocity toward the light, so the feedback loop frequency is the stimulation frequency, as in pulsed optogenetic protocols; time passing between exposures does not stimulate again. The `CyanStim` snap also images the projected light itself (mask–sample alignment check).
 2. **Real-time mode** (the default): the sample evolves in wall-clock time *while your code runs*, like on a real microscope. You wait with `time.sleep`, and your analysis latency becomes part of the experiment. This is what the examples use.
 3. **Faster than real time**, `load_microscope(..., mode="realtime", speed=10)`: the sample evolves 10x faster than the wall clock, so slow biology (cells migrating for minutes) can be tested in seconds. Shorten your waits by the same factor (`time.sleep(1.0 / speed)`) to keep the experiment's timing; physics still runs in steps of at most 0.05 s, so the cells behave the same at any speed. Only the simulator offers this: on a real microscope, the biology sets the pace. Note that your code's run time does *not* shrink, so at high speed it costs proportionally more sample time.
 4. **Stepped mode**, `load_microscope(..., mode="stepped")`: simulated time advances only via `advance(sim, seconds=...)`, never on its own. Same seed + same loop = identical result on every machine, which is what tests and figure scripts need. `sim.time` reports the simulated seconds in every mode.
@@ -142,7 +143,7 @@ Each sample backend is a subpackage that also holds the analysis helpers for its
 | `overlay(img, mask)` | RGB visualization of a stimulation mask on an image |
 | `letter_mask(char)` | Binary letter target for the assembly exercise |
 
-`vmteach.gui` adds the napari front end: `launch_gui(core)` (napari + micro-manager control widgets on the core) and `show_results(images, ...)` (explore a finished experiment as napari layers).
+`vmteach.gui` adds the napari front end: `launch_gui(core)` (napari + micro-manager control widgets on the core; every snap lands in a layer named after its channel), `show_mask(viewer, mask, name)` (overlay a target shape or stimulation pattern as a labels layer, callable from a running experiment) and `show_results(images, ...)` (explore a finished experiment as napari layers).
 
 ## Microscope geometry
 
@@ -180,6 +181,8 @@ def experiment(run):        # your feedback loop, unchanged
 run = run_experiment(experiment)   # returns immediately; the viewer stays live
 run.wait()                         # later: block until done (re-raises errors)
 ```
+
+Each snap goes to a layer named after its channel (`miRFP`, `mScarlet`, `CyanStim`, ...), with fluorescence channels blended additively, so a loop that snaps several channels per cycle shows all of them rather than only the last. `show_mask(viewer, target, "target")` adds a mask on top, for example the shape the cells should assemble into. Live mode and MDAs keep napari-micromanager's own layers.
 
 A plain `for` loop in a notebook cell would block the kernel, and with it the live viewer, until the loop ends. `run_experiment` runs the loop on a background thread instead (the same pattern as FARO's non-blocking `run_experiment`), so napari-micromanager shows every snap, channel switch and stimulation pattern while the experiment runs and the notebook stays usable. It only calls your function, so it drives a real microscope the same way. `run.wait()` keeps the GUI responsive when called from a plain script.
 
