@@ -273,28 +273,36 @@ def letter_mask(char: str, shape: tuple = (512, 512),
         raise ValueError("letter_mask takes a single character")
 
     # cv2 places text by its baseline and nominal size, not by the pixels
-    # it draws, and its stroke width follows the font scale (OpenCV 5). So
-    # take the glyph's centre line, which scales with the font, size it to
-    # span ``fill`` of the frame, widen it to ``thickness`` and centre it
-    def centre_line(scale):
-        (w, h), base = cv2.getTextSize(char, cv2.FONT_HERSHEY_SIMPLEX,
-                                       scale, 1)
-        glyph = np.zeros((h + base + 20, w + 20), np.uint8)
-        cv2.putText(glyph, char, (10, h + 10), cv2.FONT_HERSHEY_SIMPLEX,
-                    scale, 255, 1, cv2.LINE_8)
-        ys, xs = np.nonzero(_thin(glyph))
-        return ys - ys.min(), xs - xs.min()
-
-    ys, xs = centre_line(4.0)
-    span = max(ys.max(), xs.max()) + 1
-    ys, xs = centre_line(4.0 * max(min(shape) * fill - thickness, 1) / span)
-    line = np.zeros(shape, np.uint8)
+    # it draws, and in OpenCV 5 the stroke width follows the font scale. So
+    # draw the glyph, measure its drawn box and stroke width, thicken or
+    # thin it by the difference to ``thickness`` (the font keeps its flat
+    # stroke ends and sharp corners when the difference is small), rescale
+    # until the result spans ``fill`` of the frame, and centre it
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    target_px = min(shape) * fill
+    scale = 4.0
+    for i in range(4):
+        (w, h), base = cv2.getTextSize(char, font, scale, 1)
+        pad = thickness + 10
+        glyph = np.zeros((h + base + 2 * pad, w + 2 * pad), np.uint8)
+        cv2.putText(glyph, char, (pad, h + pad), font, scale, 255, 1,
+                    cv2.LINE_8)
+        dist = cv2.distanceTransform(glyph, cv2.DIST_L2, 5)
+        stroke = 2 * np.median(dist[_thin(glyph) > 0])
+        delta = int(round((thickness - stroke) / 2))
+        if delta:
+            disk = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * abs(delta) + 1, 2 * abs(delta) + 1))
+            glyph = (cv2.dilate if delta > 0 else cv2.erode)(glyph, disk)
+        ys, xs = np.nonzero(glyph)
+        size = max(ys.max() - ys.min(), xs.max() - xs.min()) + 1
+        if i < 3:
+            scale *= target_px / size
+    ys, xs = ys - ys.min(), xs - xs.min()
+    mask = np.zeros(shape, np.uint8)
     oy = int(round((shape[0] - 1 - ys.max()) / 2))
     ox = int(round((shape[1] - 1 - xs.max()) / 2))
     keep = ((ys + oy >= 0) & (ys + oy < shape[0])
             & (xs + ox >= 0) & (xs + ox < shape[1]))
-    line[ys[keep] + oy, xs[keep] + ox] = 255
-    r = max(thickness // 2, 1)
-    mask = cv2.dilate(line, cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
+    mask[ys[keep] + oy, xs[keep] + ox] = 255
     return mask
