@@ -10,6 +10,9 @@ Two entry points:
   the objective dropdown ⇒ ``core.setState("Objective", ...)``, and so on.
   Snaps executed by a running script appear live in the preview layer.
 
+* :func:`show_mask` overlays a mask (a target shape, the stimulation
+  pattern) as a labels layer, from any thread.
+
 * :func:`show_results` loads a finished experiment (images, stimulation
   masks, tracks) into napari layers for interactive exploration.
 """
@@ -19,12 +22,18 @@ from __future__ import annotations
 import numpy as np
 
 
-def launch_gui(core, *, title: str = "Virtual Microscope"):
+def launch_gui(core, *, title: str = "Virtual Microscope",
+               channel_layers: bool = True):
     """Open napari with Micro-Manager control widgets on the given core.
 
     Args:
         core: The core returned by :func:`vmteach.load_microscope` (or any
             ``CMMCorePlus``-compatible core, including a real microscope).
+        channel_layers: Show every snap in a layer named after its channel
+            (``miRFP``, ``mScarlet``, ...), so a script that snaps several
+            channels in a row shows all of them, not only the last one. Off:
+            napari-micromanager's single ``preview`` layer. Live mode and
+            MDAs always use napari-micromanager's own layers.
 
     Returns:
         The napari ``Viewer``. Call ``napari.run()`` afterwards when using
@@ -39,7 +48,103 @@ def launch_gui(core, *, title: str = "Virtual Microscope"):
     with _lazy_console(viewer):
         widget = MainWindow(viewer, mmcore=core)
     viewer.window.add_dock_widget(widget, name="Micro-Manager", area="top")
+    _CORES[id(viewer)] = core
+    if channel_layers:
+        _snaps_to_channel_layers(viewer, core, widget)
     return viewer
+
+
+_CORES: dict = {}          # id(viewer) -> core, for the pixel-size scale
+
+# how each channel is shown; unknown channels get a grey layer
+CHANNEL_COLORMAPS = {"phase-contrast": "gray", "miRFP": "magenta",
+                     "mVenus": "yellow", "mScarlet": "red",
+                     "CyanStim": "cyan"}
+
+
+def _snaps_to_channel_layers(viewer, core, widget) -> None:
+    """Show each snapped image in a layer named after its channel.
+
+    The image is read in the thread that snapped it, right after the snap:
+    napari-micromanager reads ``core.getImage()`` only once its queued
+    event reaches the GUI thread, by which time a script may already have
+    snapped the next channel, so only the last channel of a cycle ever
+    appeared.
+    """
+    from superqt.utils import ensure_main_thread
+
+    link = getattr(widget, "_core_link", None)
+    if link is not None:            # replace the single preview for snaps
+        core.events.imageSnapped.disconnect(link._image_snapped)
+
+    @ensure_main_thread
+    def show(img, channel):
+        _set_layer(viewer, channel or "snap", img, kind="image",
+                   colormap=CHANNEL_COLORMAPS.get(channel, "gray"),
+                   blending=("translucent" if channel == "phase-contrast"
+                             else "additive"))
+
+    def on_snap(*_):
+        if core.mda.is_running():   # MDA frames go to the MDA layers
+            return
+        try:
+            channel = core.getCurrentConfig("Channel")
+        except Exception:
+            channel = ""
+        show(core.getImage().copy(), channel)
+
+    core.events.imageSnapped.connect(on_snap)
+
+
+def show_mask(viewer, mask, name: str = "mask", *, color: str = "cyan",
+              opacity: float = 0.35):
+    """Overlay a binary mask (camera pixels) as a labels layer.
+
+    Use it for a target shape, a region of interest or the current
+    stimulation pattern. Calling it again with the same ``name`` updates the
+    layer in place, and it may be called from any thread, e.g. from inside
+    an experiment running with :func:`vmteach.run_experiment`.
+    """
+    from superqt.utils import ensure_main_thread
+
+    labels = (np.asarray(mask) > 0).astype(np.uint8)
+    ensure_main_thread(_set_layer)(viewer, name, labels, kind="labels",
+                                   color=color, opacity=opacity)
+
+
+def _set_layer(viewer, name, data, *, kind, **style):
+    """Create or update a layer, scaled like napari-micromanager's layers."""
+    core = _CORES.get(id(viewer))
+    px = core.getPixelSizeUm() if core is not None else 0
+    scale = (px, px) if px else (1.0, 1.0)
+    if name in viewer.layers:
+        layer = viewer.layers[name]
+        layer.data = data
+        layer.scale = scale
+        return layer
+    if kind == "labels":
+        from napari.utils.colormaps import DirectLabelColormap
+        cmap = DirectLabelColormap(color_dict={None: "transparent",
+                                               0: "transparent",
+                                               1: style["color"]})
+        layer = viewer.add_labels(data, name=name, scale=scale,
+                                  opacity=style["opacity"], colormap=cmap)
+    else:
+        first = not any(l.metadata.get("vmteach") for l in viewer.layers)
+        layer = viewer.add_image(data, name=name, scale=scale,
+                                 colormap=style["colormap"],
+                                 blending=style["blending"])
+        layer.metadata["vmteach"] = True
+        if first:
+            viewer.reset_view()
+        # keep masks on top of the images, so they stay visible
+        masks = [i for i, l in enumerate(viewer.layers)
+                 if l.metadata.get("vmteach_mask")]
+        if masks:
+            viewer.layers.move(len(viewer.layers) - 1, masks[0])
+        return layer
+    layer.metadata["vmteach_mask"] = True
+    return layer
 
 
 _MAIN_THREAD_SIGNALS: set[int] = set()
