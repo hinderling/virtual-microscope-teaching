@@ -66,6 +66,8 @@ Within the minute the cell population migrates upward, steered by your loop. Sna
 
 More in [`examples/`](examples/): `01_photoactivation.py` (image → mask → stimulate → image, with the ERK-KTR readout), `02_napari_gui.py` (GUI and script drive the same core), `03_feedback_loop.py` (the loop above, step by step, plus per-object decisions and timing), `04_event_driven.py` (the same experiment as declarative useq-schema events), `05_letter_assembly.py` (steer a dense population into the letter N, with the simulation running 5x faster than real time). The examples run in real-time mode with napari-micromanager open, so every snap, channel switch and light pattern shows up live.
 
+The activities of the NEUBIAS module *Smart microscopy feedback photomanipulation* are in [`notebooks/smart_microscopy_photomanipulation.ipynb`](notebooks/smart_microscopy_photomanipulation.ipynb): one notebook, run top to bottom, with napari open next to it (photoactivation and a first closed loop, steering and tracking, assembling cells into a letter).
+
 ## The sample: the `optogenetic` backend
 
 Cells expressing a light-sensitive receptor and a live activity readout. Blue light activates the receptor of exactly the illuminated cells; activated cells signal (visible in the reporter channel within ~5 s, reversible within ~20 s) and migrate toward the light.
