@@ -621,3 +621,24 @@ def test_letter_mask_centred_and_sized():
         assert abs((ys.max() - ys.min() + 1) - 0.85 * 512) <= 8
         areas.append((m > 0).sum())
     assert areas[1] > 1.3 * areas[0], "thickness has no effect"
+
+
+def test_reset_changes_population_and_speed():
+    """One microscope for a whole course: reset() takes a new density and
+    cell size, and sim.speed changes the clock of a running microscope."""
+    core, sim = load_microscope("optogenetic", n_cells=20, seed=0,
+                                mode="realtime", warmup=False)
+    try:
+        n20 = sim.n_cells
+        sim.reset(n_cells=75, base_radius=13.0)
+        assert sim.n_cells > 3 * n20 and sim.base_radius == 13.0
+        assert len(sim.centers) == sim.n_cells
+        sim.speed = 5
+        assert sim.speed == 5
+        core.snapImage()                        # renders with the new cells
+        t0 = sim.time
+        import time as _t
+        _t.sleep(0.4)
+        assert sim.time - t0 > 1.0, "speed 5 did not speed up the clock"
+    finally:
+        sim._engine.stop()

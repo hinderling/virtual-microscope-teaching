@@ -390,6 +390,27 @@ class OptoCellSim:
                           self._sig_rng.standard_normal(self.n_cells))
         self.drives[:] = self.signals[:, SIG_MOTILITY]
 
+    # ── time ────────────────────────────────────────────────────────────
+
+    @property
+    def speed(self) -> float:
+        """How many times faster than real time the sample evolves.
+
+        Realtime mode only; can be changed while the microscope runs (the
+        ``speed`` argument of :func:`vmteach.load_microscope`).
+        """
+        engine = getattr(self, "_engine", None)
+        return engine.time_scale if engine is not None else 1.0
+
+    @speed.setter
+    def speed(self, value: float) -> None:
+        engine = getattr(self, "_engine", None)
+        if engine is None:
+            raise RuntimeError("speed only applies to mode='realtime'")
+        if value <= 0:
+            raise ValueError(f"speed must be > 0, got {value!r}")
+        engine.time_scale = float(value)
+
     # ── stimulation ─────────────────────────────────────────────────────
 
     @property
@@ -503,15 +524,25 @@ class OptoCellSim:
 
     # ── reset ───────────────────────────────────────────────────────────
 
-    def reset(self, seed: int | None = None) -> None:
+    def reset(self, seed: int | None = None, *, n_cells: int | None = None,
+              base_radius: float | None = None) -> None:
         """Restore the initial population and all noise streams.
 
         Deterministic: after ``reset()``, rerunning the same loop yields
         bit-identical images and positions. Pass ``seed`` for a different
-        (but equally reproducible) population.
+        (but equally reproducible) population, and ``n_cells`` (cells per
+        10x field) or ``base_radius`` (um) for a different density or cell
+        size, without reloading the microscope.
         """
         if seed is not None:
             self._seed = seed
+        if base_radius is not None:
+            self.base_radius = float(base_radius)
+        if n_cells is not None:
+            fields = (self.well_size / FIELD_UM) ** 2
+            self.cells_per_field = n_cells
+            self.cells_per_well = max(1, int(round(n_cells * fields)))
+            self.n_cells = self.cells_per_well * self.n_wells
         self._rng = np.random.RandomState(self._seed)
         for o in self._optics.values():
             o.reset()

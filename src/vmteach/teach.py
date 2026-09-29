@@ -148,6 +148,7 @@ def load_microscope(backend: str = "optogenetic", *, n_cells: int = 20,
         engine.patch_snap_frame()
         engine.start()
         bridge._engine = engine
+        sim._engine = engine          # for sim.speed
 
     return core, sim
 
