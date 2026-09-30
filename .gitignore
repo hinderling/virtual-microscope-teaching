@@ -7,3 +7,4 @@ build/
 .pytest_cache/
 .DS_Store
 docs/screenshots_raw/
+.ipynb_checkpoints/

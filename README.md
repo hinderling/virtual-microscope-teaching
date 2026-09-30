@@ -130,7 +130,8 @@ The top-level `vmteach` namespace is the simulator:
 | `register_backend(name, factory)` | Register a new simulated sample |
 | `advance(sim, seconds)` | Advance simulated time (stepped mode only; in realtime mode and on hardware you wait with `time.sleep`) |
 | `run_experiment(fn)` | Run an experiment loop in the background, returning a `Run` handle (`stop()`, `sleep()`, `wait()`); keeps notebook and GUI live |
-| `sim.reset(seed)` | Restore the initial sample, for bit-identical reruns |
+| `sim.reset(seed, n_cells=, base_radius=)` | Restore the initial sample, for bit-identical reruns; optionally with a new density or cell size, on the running microscope |
+| `sim.speed` | Realtime mode: how many times faster than real time the sample evolves; settable while running |
 
 `core` is a full `pymmcore-plus` core: stage (`setXYPosition`), focus (`setPosition`), objectives (`setState("Objective", ...)`), the five channels above, exposure, binning, SLM.
 
@@ -196,4 +197,6 @@ Snap, Live (~10 fps of crawling simulated cells), channel and objective dropdown
 
 ## License
 
-MIT, see [LICENSE](LICENSE). If you use this in teaching or research, please cite the FARO paper (see [CITATION.cff](CITATION.cff)).
+MIT, see [LICENSE](LICENSE). If you use this in teaching or research, please cite the FARO paper (also in [CITATION.cff](CITATION.cff)):
+
+> Hinderling L, Landolt AE, Grädel B, Dubied L, Zahni C, Kwasny M, Bassi D, Frismantiene A, Lambert T, Dobrzyński M, Pertz O. Real-time feedback control microscopy for automation of optogenetic targeting. bioRxiv (2025). [doi:10.1101/2025.08.17.670729](https://doi.org/10.1101/2025.08.17.670729)

@@ -11,8 +11,32 @@ license: MIT
 preferred-citation:
   type: article
   title: "Real-time feedback control microscopy for automation of optogenetic targeting"
+  doi: "10.1101/2025.08.17.670729"
+  url: "https://doi.org/10.1101/2025.08.17.670729"
+  publisher:
+    name: openRxiv
+  year: 2025
+  month: 8
   authors:
     - family-names: Hinderling
       given-names: Lucien
+    - family-names: Landolt
+      given-names: Alex E.
+    - family-names: Grädel
+      given-names: Benjamin
+    - family-names: Dubied
+      given-names: Laurent
+    - family-names: Zahni
+      given-names: Cédric
+    - family-names: Kwasny
+      given-names: Moritz
+    - family-names: Bassi
+      given-names: Dario
+    - family-names: Frismantiene
+      given-names: Agne
+    - family-names: Lambert
+      given-names: Talley
+    - family-names: Dobrzyński
+      given-names: Maciej
     - family-names: Pertz
       given-names: Olivier
