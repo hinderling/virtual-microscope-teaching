@@ -29,7 +29,7 @@ from vmteach.optogenetic import detect_nuclei, measure_activity
 # Real-time mode: the sample lives in wall-clock time, like on a real
 # microscope, and napari-micromanager shows every snap as it happens.
 core, sim = load_microscope("optogenetic", n_cells=20, seed=0, mode="realtime")
-viewer = launch_gui(core)
+viewer = launch_gui(core, channel_layers=True)   # one layer per channel
 
 
 def snap(channel: str) -> np.ndarray:

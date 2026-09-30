@@ -21,7 +21,7 @@ from vmteach.optogenetic import overlay
 # The sample evolves in wall-clock time, like live cells on a real
 # microscope, and napari-micromanager shows every snap as it happens.
 core, sim = load_microscope("optogenetic", n_cells=20, seed=0, mode="realtime")
-viewer = launch_gui(core)
+viewer = launch_gui(core, channel_layers=True)   # one layer per channel
 
 print("Channels:", core.getAvailableConfigs("Channel"))
 

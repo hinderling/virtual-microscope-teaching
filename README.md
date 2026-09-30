@@ -146,7 +146,7 @@ Each sample backend is a subpackage that also holds the analysis helpers for its
 | `overlay(img, mask)` | RGB visualization of a stimulation mask on an image |
 | `letter_mask(char)` | Binary letter target for the assembly exercise |
 
-`vmteach.gui` adds the napari front end: `launch_gui(core)` (napari + micro-manager control widgets on the core; every snap lands in a layer named after its channel), `show_mask(viewer, mask, name)` (overlay a target shape or stimulation pattern as a labels layer, callable from a running experiment) and `show_results(images, ...)` (explore a finished experiment as napari layers).
+`vmteach.gui` adds the napari front end: `launch_gui(core)` (napari + micro-manager control widgets on the core; `channel_layers=True` puts every snap in a layer named after its channel), `show_mask(viewer, mask, name)` (overlay a target shape or stimulation pattern as a labels layer, callable from a running experiment) and `show_results(images, ...)` (explore a finished experiment as napari layers).
 
 ## Microscope geometry
 
@@ -185,7 +185,7 @@ run = run_experiment(experiment)   # returns immediately; the viewer stays live
 run.wait()                         # later: block until done (re-raises errors)
 ```
 
-Each snap goes to a layer named after its channel (`miRFP`, `mScarlet`, `CyanStim`, ...), with fluorescence channels blended additively, so a loop that snaps several channels per cycle shows all of them rather than only the last. `show_mask(viewer, target, "target")` adds a mask on top, for example the shape the cells should assemble into. Live mode and MDAs keep napari-micromanager's own layers.
+Snaps go to napari-micromanager's `preview` layer. A loop that snaps several channels per cycle would only ever show the last one there, so `launch_gui(core, channel_layers=True)` offers a convenience: each snap goes to a layer named after its channel (`miRFP`, `mScarlet`, `CyanStim`, ...), with fluorescence channels blended additively. The examples and the teaching notebook use it. `show_mask(viewer, target, "target")` adds a mask on top, for example the shape the cells should assemble into. Live mode and MDAs keep napari-micromanager's own layers.
 
 A plain `for` loop in a notebook cell would block the kernel, and with it the live viewer, until the loop ends. `run_experiment` runs the loop on a background thread instead (the same pattern as FARO's non-blocking `run_experiment`), so napari-micromanager shows every snap, channel switch and stimulation pattern while the experiment runs and the notebook stays usable. It only calls your function, so it drives a real microscope the same way. `run.wait()` keeps the GUI responsive when called from a plain script.
 

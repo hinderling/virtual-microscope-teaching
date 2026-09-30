@@ -18,7 +18,7 @@ The top rows are the **napari-micromanager** control toolbars, the same plugin u
 
 | Control | What it does | Script equivalent |
 |---|---|---|
-| **Snap** (camera icon) | acquire one image into the layer of the current channel (`miRFP`, `mScarlet`, ...) | `core.snapImage()` |
+| **Snap** (camera icon) | acquire one image into the `preview` layer | `core.snapImage()` |
 | **Live** (film icon) | continuous acquisition; the simulated cells crawl in real time | `core.startContinuousSequenceAcquisition()` |
 | **Channel** dropdown | phase-contrast / miRFP (H2B nuclei) / mVenus (optoFGFR) / mScarlet (ERK-KTR activity reporter) / **CyanStim** (images the projected SLM light; use it to verify the alignment between mask and sample) | `core.setConfig("Channel", ...)` |
 | **Objectives** dropdown | 4x / 10x / 20x / 40x / 60x; the image stays 512x512, the pixel size (`core.getPixelSizeUm()`) and field of view change | `core.setState("Objective", ...)` |
@@ -32,7 +32,7 @@ The top rows are the **napari-micromanager** control toolbars, the same plugin u
 ## 2. Watch a feedback script drive the microscope
 
 Keep the GUI open and run the feedback loop from [`examples/03_feedback_loop.py`](../examples/03_feedback_loop.py) in the same
-session: each `core.snapImage()` of the loop refreshes the layer of its channel, so you watch the smart-acquisition script "click through" the experiment, channel by channel. `vmteach.gui.show_mask(viewer, mask, "stimulation")` adds the current stimulation pattern on top.
+session: each `core.snapImage()` of the loop refreshes the `preview` layer, so you watch the smart-acquisition script "click through" the experiment (open the GUI with `launch_gui(core, channel_layers=True)` to keep one layer per channel instead). `vmteach.gui.show_mask(viewer, mask, "stimulation")` adds the current stimulation pattern on top.
 
 ## 3. Explore finished experiments as layers
 

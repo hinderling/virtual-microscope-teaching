@@ -25,7 +25,7 @@ SPEED = 5
 # keep a collision distance (~2 cell radii), so the stroke must fit them.
 core, sim = load_microscope("optogenetic", n_cells=75, seed=0, base_radius=13.0,
                             mode="realtime", speed=SPEED)
-viewer = launch_gui(core)
+viewer = launch_gui(core, channel_layers=True)   # one layer per channel
 target = letter_mask("N", fill=0.85, thickness=60)
 show_mask(viewer, target, "target", color="orange")   # where cells should go
 

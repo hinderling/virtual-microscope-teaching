@@ -23,17 +23,19 @@ import numpy as np
 
 
 def launch_gui(core, *, title: str = "Virtual Microscope",
-               channel_layers: bool = True):
+               channel_layers: bool = False):
     """Open napari with Micro-Manager control widgets on the given core.
 
     Args:
         core: The core returned by :func:`vmteach.load_microscope` (or any
             ``CMMCorePlus``-compatible core, including a real microscope).
-        channel_layers: Show every snap in a layer named after its channel
-            (``miRFP``, ``mScarlet``, ...), so a script that snaps several
-            channels in a row shows all of them, not only the last one. Off:
-            napari-micromanager's single ``preview`` layer. Live mode and
-            MDAs always use napari-micromanager's own layers.
+        channel_layers: Off (default): snaps go to napari-micromanager's
+            single ``preview`` layer, as in the plain plugin. On: a
+            convenience for scripts that snap several channels per cycle;
+            every snap goes to a layer named after its channel
+            (``miRFP``, ``mScarlet``, ...), so all of them stay visible, not
+            only the last one. Live mode and MDAs always use
+            napari-micromanager's own layers.
 
     Returns:
         The napari ``Viewer``. Call ``napari.run()`` afterwards when using
@@ -49,6 +51,7 @@ def launch_gui(core, *, title: str = "Virtual Microscope",
         widget = MainWindow(viewer, mmcore=core)
     viewer.window.add_dock_widget(widget, name="Micro-Manager", area="top")
     _CORES[id(viewer)] = core
+    _keep_masks_on_top(viewer)
     if channel_layers:
         _snaps_to_channel_layers(viewer, core, widget)
     return viewer
@@ -96,6 +99,26 @@ def _snaps_to_channel_layers(viewer, core, widget) -> None:
     core.events.imageSnapped.connect(on_snap)
 
 
+def _keep_masks_on_top(viewer) -> None:
+    """Move mask layers (show_mask) above any image layer added later.
+
+    Otherwise the ``preview`` layer, created on the first snap, or a new
+    channel layer would cover a mask added before it.
+    """
+    from qtpy.QtCore import QTimer
+
+    def lift(*_):
+        masks = [l for l in viewer.layers if l.metadata.get("vmteach_mask")]
+        top = len(viewer.layers) - len(masks)
+        if all(viewer.layers.index(l) >= top for l in masks):
+            return
+        for l in masks:
+            viewer.layers.move(viewer.layers.index(l), len(viewer.layers))
+
+    # after the insertion has finished, not from inside its event
+    viewer.layers.events.inserted.connect(lambda e: QTimer.singleShot(0, lift))
+
+
 def show_mask(viewer, mask, name: str = "mask", *, color: str = "cyan",
               opacity: float = 0.35):
     """Overlay a binary mask (camera pixels) as a labels layer.
@@ -137,11 +160,6 @@ def _set_layer(viewer, name, data, *, kind, **style):
         layer.metadata["vmteach"] = True
         if first:
             viewer.reset_view()
-        # keep masks on top of the images, so they stay visible
-        masks = [i for i, l in enumerate(viewer.layers)
-                 if l.metadata.get("vmteach_mask")]
-        if masks:
-            viewer.layers.move(len(viewer.layers) - 1, masks[0])
         return layer
     layer.metadata["vmteach_mask"] = True
     return layer
